@@ -122,7 +122,8 @@ class _DFSGridSearchCVPipeline(Pipeline):
                     break
                 prev_i_with_params = i
 
-        if self.verbose > 1 and fit_score_mode == 'fit' and not X is None:
+        #if self.verbose > 1 and fit_score_mode == 'fit' and not X is None:
+        if fit_score_mode == 'fit' and not X is None:
             # Visualize from which step in the pipeline we (re)start the transform.
             print("[{}] ".format(start_step+1)+"-"*(start_step)+">")
 

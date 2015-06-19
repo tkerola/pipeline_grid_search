@@ -85,6 +85,7 @@ def calc_n_ideal_fit_calls(parts, cv_params, n_folds):
             if est_name == p.__class__.__name__:
                 param_count *= len(vals)
         nparams.append(param_count)
+    print(nparams)
         
     n_ideal_calls = nfits(nparams)
     n_ideal_calls *= n_folds        # We repeat the above number of fit calls for each fold 
@@ -205,15 +206,39 @@ def test_pipeline_grid_search5():
 
     perform_pipeline_case(parts, cv_params)
 
+def test_pipeline_grid_search6():
+    # Test that the number of estimator calls is less than the ones for regular GridSearchCV
+    parts = [
+        create_mock_estimator("f0",[]),
+        create_mock_estimator("f1", [("p1",0),("p2",2)]),
+        create_mock_estimator("f2",[]),
+        create_mock_estimator("f3",[("c",0),("d",0)]),
+        create_mock_estimator("f4",[]),
+        create_mock_estimator("f5",[]),
+        create_mock_classifier("f6",[]),
+        #SVC() # This does not work, as we need to implement our custom counting of function calls in order to measure the tests.
+        ]
+
+    cv_params = [
+        ('f1__p1', [10,20]),
+        ('f3__c', [10,20,30]),
+        ('f3__d', [10,20,30,40]),
+        #('SVC__C', [1.,10.,100.,1000.]),
+    ]
+
+    perform_pipeline_case(parts, cv_params)
+
 def perform_pipeline_case(parts, cv_params):
     # tests a particular pipe and cv_params combination
 
     pipe = Pipeline([ (p.__class__.__name__, p) for p in parts ])
+    print(pipe)
 
     X, y = make_classification(n_samples=100, n_features=20)
 
     n_folds = 5
     n_jobs = 1
+    verbose = 0
 
     # mock.MagicMock cannot be used since GridSearchCV resets each estimator using
     # clone() before each call to fit.
@@ -224,12 +249,11 @@ def perform_pipeline_case(parts, cv_params):
     # Start PipelineGridSearchCV test here
     n_transform_calls = 0
     n_fit_calls = 0
-    verbose = 0
     model = PipelineGridSearchCV(pipe, dict(cv_params), cv=n_folds, verbose=verbose, n_jobs=n_jobs)
     model.fit(X,y)
     print("Counts (PipelineGridSearchCV)")
-    print("n_transform_calls:",n_transform_calls)
     print("n_fit_calls:",n_fit_calls)
+    print("n_transform_calls:",n_transform_calls)
 
     n_ideal_fit_calls = calc_n_ideal_fit_calls(parts,cv_params,n_folds)
     n_ideal_transform_calls = calc_n_ideal_transform_calls(parts,cv_params,n_folds)
@@ -243,8 +267,8 @@ def perform_pipeline_case(parts, cv_params):
     model_naive = GridSearchCV(pipe, dict(cv_params), cv=n_folds, verbose=verbose, n_jobs=n_jobs)
     model_naive.fit(X,y)
     print("Counts (GridSearchCV)")
-    print("n_transform_calls:",n_transform_calls)
     print("n_fit_calls:",n_fit_calls)
+    print("n_transform_calls:",n_transform_calls)
 
     n_param_combs = np.prod(map(lambda x: len(x[1]), cv_params))
     n_naive_fit_calls = n_param_combs * len(parts) * n_folds + len(parts)
