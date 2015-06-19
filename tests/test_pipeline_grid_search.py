@@ -14,7 +14,7 @@ from sklearn.pipeline import Pipeline
 
 from nose.tools import assert_equal
 
-from pipeline_grid_search import PipelineGridSearchCV
+from pipeline_grid_search.pipeline_grid_search import PipelineGridSearchCV
 
 # Globals for counting estimator calls
 n_transform_calls = 0
@@ -224,7 +224,8 @@ def perform_pipeline_case(parts, cv_params):
     # Start PipelineGridSearchCV test here
     n_transform_calls = 0
     n_fit_calls = 0
-    model = PipelineGridSearchCV(pipe, dict(cv_params), cv=n_folds, verbose=1, n_jobs=n_jobs)
+    verbose = 0
+    model = PipelineGridSearchCV(pipe, dict(cv_params), cv=n_folds, verbose=verbose, n_jobs=n_jobs)
     model.fit(X,y)
     print("Counts (PipelineGridSearchCV)")
     print("n_transform_calls:",n_transform_calls)
@@ -239,8 +240,8 @@ def perform_pipeline_case(parts, cv_params):
     # Start GridSearchCV test here
     n_transform_calls = 0
     n_fit_calls = 0
-    model = GridSearchCV(pipe, dict(cv_params), cv=n_folds, verbose=1, n_jobs=n_jobs)
-    model.fit(X,y)
+    model_naive = GridSearchCV(pipe, dict(cv_params), cv=n_folds, verbose=verbose, n_jobs=n_jobs)
+    model_naive.fit(X,y)
     print("Counts (GridSearchCV)")
     print("n_transform_calls:",n_transform_calls)
     print("n_fit_calls:",n_fit_calls)
@@ -250,5 +251,9 @@ def perform_pipeline_case(parts, cv_params):
     n_naive_transform_calls = n_param_combs * (len(parts)-1) * n_folds * 2 + (len(parts)-1) # The 2 is for running on both the train and dev. set
     assert_equal(n_fit_calls, n_naive_fit_calls)
     assert_equal(n_transform_calls, n_naive_transform_calls)
+
+    # Make sure that PipelineGridSearchCV and GridSearchCV return the same result.
+    assert_equal(model_naive.best_score_, model.best_score_)
+    assert_equal(model_naive.best_params_, model.best_params_)
 
 #test_pipeline_grid_search()
