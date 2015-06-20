@@ -14,7 +14,7 @@ from sklearn.pipeline import Pipeline
 
 from nose.tools import assert_equal
 
-from pipeline_grid_search.pipeline_grid_search import PipelineGridSearchCV
+from pipeline_grid_search import PipelineGridSearchCV
 
 # Globals for counting estimator calls
 n_transform_calls = 0
@@ -280,4 +280,3 @@ def perform_pipeline_case(parts, cv_params):
     assert_equal(model_naive.best_score_, model.best_score_)
     assert_equal(model_naive.best_params_, model.best_params_)
 
-#test_pipeline_grid_search()

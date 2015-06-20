@@ -70,19 +70,10 @@ bin
 *.depend
 *.layout
 
-# Misc. project-specific folders
-graphs
-build
-
-# Pegasos files
-._*
-*.tgz
-
 # Python files
 *.pyc
 *.pyo
 
-# Data dir
-data
-
-python/test
+# nosetests coverage files
+.coverage
+cover

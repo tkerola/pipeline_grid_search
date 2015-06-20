@@ -5,8 +5,7 @@ while avoiding unnecessary repeated calls to fit and score.
 
 Updated for sklearn 0.16.1
 
-Author: Tommi Kerola
-License: BSD
+License: BSD 3-Clause (see LICENSE)
 """
 
 from __future__ import print_function
@@ -122,8 +121,7 @@ class _DFSGridSearchCVPipeline(Pipeline):
                     break
                 prev_i_with_params = i
 
-        #if self.verbose > 1 and fit_score_mode == 'fit' and not X is None:
-        if fit_score_mode == 'fit' and not X is None:
+        if self.verbose > 1 and fit_score_mode == 'fit' and not X is None:
             # Visualize from which step in the pipeline we (re)start the transform.
             print("[{}] ".format(start_step+1)+"-"*(start_step)+">")
 

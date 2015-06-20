@@ -21,36 +21,19 @@ PipelineGridSearchCV, on the other hand, requires only the optimal
 where nverts is the number of vertices in the pipeline parameter call
 tree.
 
-<plot here>
-
 Usage
 =====
-    from sklearn.datasets import make_classification
-    from sklearn.decomposition import PCA
-    from sklearn.pipeline import Pipeline
-    from sklearn.svm import SVC
-
-    from pipeline_grid_search import PipelineGridSearchCV
-
-    pipe = Pipeline([
-        ("pca", PCA()),
-        ("svm", SVC()),
-        ])
-
-    cv_params = dict([
-        ('pca__n_components', [100,200,300]),
-        ('svm__C', [1,10,100,1000]),
-    ])
-
-    X, y = make_classification(n_samples=1000, n_features=1000)
-
-    n_folds = 5
-    n_jobs = 1
-
-    model = PipelineGridSearchCV(pipe, cv_params, cv=n_folds, verbose=1, n_jobs=n_jobs)
-    model.fit(X,y) # This will run much faster than ordinary GridSearchCV
+$ python examples/example.py
+-----------------------------------
+Elapsed time for doing grid search:
+PipelineGridSearchCV: 12.456952095 secs
+GridSearchCV: 38.9708809853 secs
 
 Tests
 =====
 Make sure that everything is working correctly by running the test suite:
-$ nosetests .
+$ make test
+
+License
+=======
+BSD 3-Clause (see LICENSE)
