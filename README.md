@@ -27,7 +27,7 @@ The idea is that the doing grid search on a pipeline estimator forms
 a directed tree of computation, where each grid search parameter causes
 the tree to split into a new subtree.
  
-As an example, consider a the following pipeline and grid search parameters:
+As an example, consider the following pipeline and grid search parameters:
 ```python
 pipe = Pipeline([
     ('pca', PCA()), 
@@ -50,8 +50,11 @@ Doing grid search on this pipeline will result in the following grid search tree
 
 Each pass from the root to a leaf corresponds to one specific selection of parameters for
 the estimators in the pipeline.
-We can see by looking at the tree that calling `model.fit()` from the root of the tree for each set of parameters is unnecessary;
+We can see that calling `model.fit()` from the root of the tree for each set of parameters is unnecessary;
 it is sufficient to call it from nodes in depth first search (DFS) order if the parameters are updated in that order as well.
+For example, if we have previously called `fit()` from the root with the parameters `{'pca__n_components': 100, 'norm__norm': 'l2', 'svm__C': 100}`
+and then want to try the parameters `{'pca__n_components': 100, 'norm__norm': 'l2', 'svm__C': 100}`, then we only need to restart the pipeline
+computation from the SVM step; only the `svm__C` parameter has changed.
 
 While `GridSearchCV` will call `fit()` from the root each time, `PipelineGridSearchCV` keeps track of the order of the searched
 parameters, and calls fit only from the nodes necessary in order to evaluate a new parameter choice, avoiding unnecessary repeated computation.
