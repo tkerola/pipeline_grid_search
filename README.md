@@ -1,8 +1,8 @@
 
 PipelineGridSearchCV
 ====================
-An optimized version of GridSearchCV and Pipeline that
-avoids unnecessary calls to fit()/transform() by doing grid search in
+An optimized usage case of scikit-learn's `GridSearchCV` and `Pipeline` that
+avoids unnecessary calls to `fit()/transform()` by doing grid search in
 depth first search (DFS) order.
 
 Motivation
@@ -12,13 +12,13 @@ a full pipeline computation for each set of parameters,
 despite some parameters being the same as before,
 causing unnecessary calls to fit/transform.
 
-Doing 5-fold CV using GridSearchCV on a Pipeline will
+Doing 5-fold CV using `GridSearchCV` on a Pipeline will
 cause `prod(param_counts)*pipe_length*5+pipe_length` calls to `fit()`,
 where `prod(param_counts)` is the product of the number of grid search
 parameters for each part of the pipeline, and `pipe_length` is the
 length of the pipeline.
 
-PipelineGridSearchCV, on the other hand, requires only the optimal
+`PipelineGridSearchCV`, on the other hand, requires only the optimal
 `(nverts-1)*5+pipe_length` calls to `fit()`,
 where `nverts` is the number of vertices in the pipeline parameter call
 tree.
@@ -27,7 +27,7 @@ The idea is that the doing grid search on a pipeline estimator forms
 a directed tree of computation, where each grid search parameter causes
 the tree to split into a new subtree.
  
-As an example, consider a the following Pipeline and grid search parameters:
+As an example, consider a the following pipeline and grid search parameters:
 ```python
 pipe = Pipeline([
     ('pca', PCA()), 
@@ -44,10 +44,11 @@ cv_params = {
 model = PipelineGridSearchCV(pipe, cv_params)
 ```
 
+We have `2*1*3 = 6` parameter combinations to evaluate using grid search.
 Doing grid search on this pipeline will result in the following grid search tree.
 ![Pipeline grid search tree](https://cloud.githubusercontent.com/assets/3026734/8267030/675c638c-178a-11e5-8efe-bf0d52ddd8b9.png)
 
-We can see by looking at the tree that calling `model.fit()` from the root of the tree for each set of paramters is unnecessary;
+We can see by looking at the tree that calling `model.fit()` from the root of the tree for each set of parameters is unnecessary;
 it is sufficient to call it in depth first search (DFS) order if the parameters are updated in that order as well.
 
 Usage
