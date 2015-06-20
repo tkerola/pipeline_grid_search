@@ -65,7 +65,7 @@ The pipe grid search structure for the above example corresponds to pipe param. 
 | Pipe param. count | #calls PipelineGridSearchCV (A) | #calls GridSearchCV (B) | A/B |
 | --------------------- | ------------------------------- | ----------------------- | --- |
 | [2, 1, 3]             | 10                              | 18                      | 0.555 |
-| [10, 20, 30, 20]      | 126210                          | 480000                  | 0.2629375 |
+| [10, 20, 30, 20]      | 126210                          | 480000                  | 0.263 |
 | [1, 1, 1, 10, 1, 20, 20] |  4223                        | 28000                   | 0.151 |
 
 We can see that PipelineGridSearchCV gives better performance the deeper and wider the pipeline grid search gets.
