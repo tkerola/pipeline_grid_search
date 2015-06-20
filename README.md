@@ -73,6 +73,7 @@ Dependencies
 ============
 Tested with:
 ```
+python 2.7.3
 numpy 1.9.2
 scikit-learn 0.16.1
 nosetests 1.3.4 (for testing)
