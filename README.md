@@ -53,7 +53,7 @@ the estimators in the pipeline.
 We can see that calling `model.fit()` from the root of the tree for each set of parameters is unnecessary;
 it is sufficient to call it from nodes in depth first search (DFS) order if the parameters are updated in that order as well.
 For example, if we have previously called `fit()` from the root with the parameters `{'pca__n_components': 100, 'norm__norm': 'l2', 'svm__C': 100}`
-and then want to try the parameters `{'pca__n_components': 100, 'norm__norm': 'l2', 'svm__C': 100}`, then we only need to restart the pipeline
+and then want to try the parameters `{'pca__n_components': 100, 'norm__norm': 'l2', 'svm__C': 10}`, then we only need to restart the pipeline
 computation from the SVM step; only the `svm__C` parameter has changed.
 
 While `GridSearchCV` will call `fit()` from the root each time, `PipelineGridSearchCV` keeps track of the order of the searched
