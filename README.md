@@ -48,8 +48,13 @@ We have `2*1*3 = 6` parameter combinations to evaluate using grid search.
 Doing grid search on this pipeline will result in the following grid search tree.
 ![Pipeline grid search tree](https://cloud.githubusercontent.com/assets/3026734/8267030/675c638c-178a-11e5-8efe-bf0d52ddd8b9.png)
 
+Each pass from the root to a leaf corresponds to one specific selection of parameters for
+the estimators in the pipeline.
 We can see by looking at the tree that calling `model.fit()` from the root of the tree for each set of parameters is unnecessary;
-it is sufficient to call it in depth first search (DFS) order if the parameters are updated in that order as well.
+it is sufficient to call it from nodes in depth first search (DFS) order if the parameters are updated in that order as well.
+
+While `GridSearchCV` will call `fit()` from the root each time, `PipelineGridSearchCV` keeps track of the order of the searched
+parameters, and calls fit only from the nodes necessary in order to evaluate a new parameter choice, avoiding unnecessary repeated computation.
 
 Usage
 =====
@@ -67,7 +72,7 @@ Tested with:
 ```
 numpy 1.9.2
 scikit-learn 0.16.1
-nosetets 1.3.4 (for testing)
+nosetests 1.3.4 (for testing)
 ```
 
 Tests
