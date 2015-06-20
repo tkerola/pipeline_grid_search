@@ -59,6 +59,17 @@ computation from the SVM step; only the `svm__C` parameter has changed.
 While `GridSearchCV` will call `fit()` from the root each time, `PipelineGridSearchCV` keeps track of the order of the searched
 parameters, and calls fit only from the nodes necessary in order to evaluate a new parameter choice, avoiding unnecessary repeated computation.
 
+Below is a comparison of the number of calls to `fit`, comparing the optimized and naive approach to grid search.
+The pipe grid search structure for the above example corresponds to pipe param. count [2, 1, 3].
+
+| Pipe param. count | #calls PipelineGridSearchCV (A) | #calls GridSearchCV (B) | A/B |
+| --------------------- | ------------------------------- | ----------------------- | --- |
+| [2, 1, 3]             | 10                              | 18                      | 0.555 |
+| [10, 20, 30, 20]      | 126210                          | 480000                  | 0.2629375 |
+| [1, 1, 1, 10, 1, 20, 20] |  4223                        | 28000                   | 0.151 |
+
+We can see that PipelineGridSearchCV gives better performance the deeper and wider the pipeline grid search gets.
+
 Usage
 =====
 ```
