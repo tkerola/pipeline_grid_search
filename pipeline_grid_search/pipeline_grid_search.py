@@ -6,6 +6,8 @@ while avoiding unnecessary repeated calls to fit and score.
 Updated for sklearn 0.16.1
 
 License: BSD 3-Clause (see LICENSE)
+This file contains partly rewritten source code from scikit-learn's pipeline.py and grid_search.py.
+These are also under a BSD 3-Clause license (see https://github.com/scikit-learn/scikit-learn/blob/master/COPYING).
 """
 
 from __future__ import print_function
