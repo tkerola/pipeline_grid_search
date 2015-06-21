@@ -9,8 +9,11 @@ import numpy as np
 
 from sklearn.base import BaseEstimator, TransformerMixin, ClassifierMixin
 from sklearn.datasets import make_classification
+from sklearn.decomposition import PCA
 from sklearn.grid_search import GridSearchCV
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import Normalizer
+from sklearn.svm import SVC
 
 from nose.tools import assert_equal
 
@@ -215,20 +218,36 @@ def test_pipeline_grid_search6():
         create_mock_estimator("f3",[("c",0),("d",0)]),
         create_mock_estimator("f4",[]),
         create_mock_estimator("f5",[]),
-        create_mock_classifier("f6",[]),
-        #SVC() # This does not work, as we need to implement our custom counting of function calls in order to measure the tests.
+        SVC() 
         ]
 
     cv_params = [
         ('f1__p1', [10,20]),
         ('f3__c', [10,20,30]),
         ('f3__d', [10,20,30,40]),
-        #('SVC__C', [1.,10.,100.,1000.]),
+        ('SVC__C', [1.,10.,100.,1000.]),
     ]
 
-    perform_pipeline_case(parts, cv_params)
+    # Set assert_n_calls_equal to False, as we need to implement our custom counting of function calls in order to measure the call tests.
+    perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False)
 
-def perform_pipeline_case(parts, cv_params):
+def test_pipeline_grid_search7():
+    # Test that the number of estimator calls is less than the ones for regular GridSearchCV
+    parts = [
+        PCA(),
+        Normalizer(),
+        SVC()
+        ]
+
+    cv_params = [
+        ('PCA__n_components', [3,5,7]),
+        ('Normalizer__norm', ['l2']),
+        ('SVC__C', [1.,10.,100.,1000.]),
+    ]
+
+    perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False)
+
+def perform_pipeline_case(parts, cv_params, assert_n_calls_equal=True):
     # tests a particular pipe and cv_params combination
 
     pipe = Pipeline([ (p.__class__.__name__, p) for p in parts ])
@@ -257,9 +276,10 @@ def perform_pipeline_case(parts, cv_params):
 
     n_ideal_fit_calls = calc_n_ideal_fit_calls(parts,cv_params,n_folds)
     n_ideal_transform_calls = calc_n_ideal_transform_calls(parts,cv_params,n_folds)
-    # Make sure that PipelineGridSearchCV only called fit the optimal number of times.
-    assert_equal(n_fit_calls, n_ideal_fit_calls)
-    assert_equal(n_transform_calls, n_ideal_transform_calls)
+    if assert_n_calls_equal:
+        # Make sure that PipelineGridSearchCV only called fit the optimal number of times.
+        assert_equal(n_fit_calls, n_ideal_fit_calls)
+        assert_equal(n_transform_calls, n_ideal_transform_calls)
 
     # Start GridSearchCV test here
     n_transform_calls = 0
@@ -273,8 +293,9 @@ def perform_pipeline_case(parts, cv_params):
     n_param_combs = np.prod(map(lambda x: len(x[1]), cv_params))
     n_naive_fit_calls = n_param_combs * len(parts) * n_folds + len(parts)
     n_naive_transform_calls = n_param_combs * (len(parts)-1) * n_folds * 2 + (len(parts)-1) # The 2 is for running on both the train and dev. set
-    assert_equal(n_fit_calls, n_naive_fit_calls)
-    assert_equal(n_transform_calls, n_naive_transform_calls)
+    if assert_n_calls_equal:
+        assert_equal(n_fit_calls, n_naive_fit_calls)
+        assert_equal(n_transform_calls, n_naive_transform_calls)
 
     # Make sure that PipelineGridSearchCV and GridSearchCV return the same result.
     assert_equal(model_naive.best_score_, model.best_score_)
