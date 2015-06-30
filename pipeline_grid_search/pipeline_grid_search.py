@@ -19,7 +19,7 @@ from collections import Sized, defaultdict
 import numpy as np
 
 from sklearn.base import is_classifier, clone
-from sklearn.cross_validation import check_cv, _fit_and_score
+from sklearn.cross_validation import check_cv, _fit_and_score, _safe_split
 from sklearn.externals.joblib import Parallel, delayed
 from sklearn.externals import six
 from sklearn.grid_search import GridSearchCV, ParameterGrid, _CVScoreTuple
@@ -245,28 +245,37 @@ def _fit_and_score_pipeline_grid_fold(
     out = []
     for parameters in parameter_iterable:
 
-        # Bookkeeping of the previously calculated
-        # steps does not work if we clone
-        # the pipeline as clone(grid_estimator),
-        # as the lists fit_transform_history etc. are
-        # reset each iteration.
-        # Instead, just clone the subestimators.
-        grid_estimator.store_cv_params(**parameters)
+        try:
+            # Bookkeeping of the previously calculated
+            # steps does not work if we clone
+            # the pipeline as clone(grid_estimator),
+            # as the lists fit_transform_history etc. are
+            # reset each iteration.
+            # Instead, just clone the subestimators.
+            grid_estimator.store_cv_params(**parameters)
 
-        # Note that we use a custom clone method here
-        # that skips cloning _DFSGridSearchCVPipeline,
-        # and only clones the pipeline steps.
-        # This is needed in order to keep track of previous
-        # calculations during grid search, which allows
-        # us to avoid repeated calculations of the same
-        # pipeline step.
-        grid_estimator.clone_steps()
-        grid_estimator.set_params(**parameters)  # Set params of subestimators
+            # Note that we use a custom clone method here
+            # that skips cloning _DFSGridSearchCVPipeline,
+            # and only clones the pipeline steps.
+            # This is needed in order to keep track of previous
+            # calculations during grid search, which allows
+            # us to avoid repeated calculations of the same
+            # pipeline step.
+            grid_estimator.clone_steps()
+            grid_estimator.set_params(**parameters)  # Set params of subestimators
 
-        ret = _fit_and_score(grid_estimator, X, y, scorer,
-                             train, test, verbose, parameters, fit_params,
-                             False, return_parameters, error_score)
-        out.append(ret)
+            ret = _fit_and_score(grid_estimator, X, y, scorer,
+                                 train, test, verbose, parameters, fit_params,
+                                 False, return_parameters, error_score)
+        except:
+            # In case fit threw an exception, store the result, with NaNs.
+            ret = []
+            X_test, y_test = _safe_split(grid_estimator, X, y, test, train)
+            ret.extend([np.float("NaN"), _num_samples(X_test), np.float("NaN")])
+            if return_parameters:
+                ret.append(parameters)
+        finally:
+            out.append(ret)
 
     grid_estimator.grid_search_mode = False
 
