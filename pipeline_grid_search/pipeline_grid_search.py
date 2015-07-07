@@ -451,11 +451,15 @@ class _DFSParameterGrid(ParameterGrid):
                return map(operator.itemgetter(0), step.transformer_list)
             return []
 
-        def cmp_func((pname1, _), (pname2, __)):
-            nested_stepnames1 = pname1.split('__')
-            nested_stepnames2 = pname2.split('__')
+        def cmp_func((pname1, vals1), (pname2, vals2)):
+            parts1 = pname1.split('__')
+            parts2 = pname2.split('__')
+            nested_stepnames1 = parts1[:-1]
+            nested_stepnames2 = parts2[:-1]
+            param1 = parts1[-1]
+            param2 = parts2[-1]
             pipe_stepnames = map(operator.itemgetter(0), self.pipeline.steps)
-            for n1,n2 in itertools.izip_longest(nested_stepnames1[:-1], nested_stepnames2[:-1]):
+            for n1,n2 in itertools.izip_longest(nested_stepnames1, nested_stepnames2):
                 if n1 is None:
                     return 1
                 elif n2 is None:
@@ -470,7 +474,8 @@ class _DFSParameterGrid(ParameterGrid):
                 if len(pipe_stepnames) == 0:
                     break
 
-            return 0
+            # step is equal, so let param name and values determine order
+            return cmp((param1,vals2), (param2,vals2))
 
         for p in self.param_grid:
             # Sort for reproducibility (according to DFS order).
