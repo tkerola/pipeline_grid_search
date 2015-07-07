@@ -11,7 +11,7 @@ from sklearn.base import BaseEstimator, TransformerMixin, ClassifierMixin
 from sklearn.datasets import make_classification
 from sklearn.decomposition import PCA
 from sklearn.grid_search import GridSearchCV
-from sklearn.pipeline import Pipeline
+from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.preprocessing import Normalizer
 from sklearn.svm import SVC
 
@@ -247,6 +247,38 @@ def test_pipeline_grid_search7():
 
     perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False)
 
+def test_pipeline_grid_search8():
+    # Test using a FeatureUnion with embedded Pipelines.
+    parts = [
+        create_mock_estimator("f0",[]),
+        FeatureUnion([
+            ('feat1', Pipeline([
+                ('f11', create_mock_estimator("f11", [("p1",0),("p2",2)])),
+                ])),
+            ('feat2', Pipeline([
+                ('f12', create_mock_estimator("f12", [("a",0)])),
+                ])),
+            ]),
+        create_mock_estimator("f1", [("p1",0),("p2",2)]),
+        create_mock_estimator("f2",[]),
+        create_mock_estimator("f3",[("c",0),("d",0)]),
+        create_mock_estimator("f4",[]),
+        create_mock_estimator("f5",[]),
+        create_mock_classifier("f11",[]),
+        ]
+
+    cv_params = [
+        ('FeatureUnion__feat1__f11__p1', [10,20]),
+        ('FeatureUnion__feat2__f12__a', [10,20,30]),
+        ('f1__p1', [10,20]),
+        ('f3__c', [10,20,30]),
+        ('f3__d', [10,20,30,40]),
+    ]
+
+    # Set assert_n_calls_equal to False, as we need to implement our custom counting of function calls in order to measure the call tests.
+    perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False)
+    # TODO: Update assert_n_calls_equal logic to work correctly with pipelines embedded in FeatureUnions.
+
 def perform_pipeline_case(parts, cv_params, assert_n_calls_equal=True):
     # tests a particular pipe and cv_params combination
 
@@ -270,6 +302,7 @@ def perform_pipeline_case(parts, cv_params, assert_n_calls_equal=True):
     n_fit_calls = 0
     model = PipelineGridSearchCV(pipe, dict(cv_params), cv=n_folds, verbose=verbose, n_jobs=n_jobs)
     model.fit(X,y)
+    print("model.best_estimator_: {}".format(model.best_estimator_))
     print("Counts (PipelineGridSearchCV)")
     print("n_fit_calls:",n_fit_calls)
     print("n_transform_calls:",n_transform_calls)

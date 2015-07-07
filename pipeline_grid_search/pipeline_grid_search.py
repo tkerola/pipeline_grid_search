@@ -14,17 +14,18 @@ from __future__ import print_function
 from __future__ import division
 
 import itertools
+import operator
 from collections import Sized, defaultdict
 
 import numpy as np
 
-from sklearn.base import is_classifier, clone
+from sklearn.base import is_classifier, clone, BaseEstimator
 from sklearn.cross_validation import check_cv, _fit_and_score, _safe_split
 from sklearn.externals.joblib import Parallel, delayed
 from sklearn.externals import six
 from sklearn.grid_search import GridSearchCV, ParameterGrid, _CVScoreTuple
 from sklearn.metrics.scorer import check_scoring
-from sklearn.pipeline import Pipeline
+from sklearn.pipeline import Pipeline, FeatureUnion 
 from sklearn.utils.validation import _num_samples, indexable
 
 # Note: These counters do not work correctly with clone
@@ -301,19 +302,29 @@ class PipelineGridSearchCV(GridSearchCV):
         # Make the supplied Pipeline _DFSGridSearchCVPipeline
         # for doing the grid_search
         grid_estimator = _DFSGridSearchCVPipeline(
-            self.estimator, self.param_grid, self.verbose)
+            clone(self.estimator), self.param_grid, self.verbose)
 
-        def add_sub_dfs_pipelines(params, steps):
-            params_steps = _get_params_steps(params)
+        def add_sub_dfs_pipelines(est, params):
+            try:
+                params_steps = _get_params_steps(params)
+            except ValueError: # This happens when we reach an estimator without any subestimators.
+                return
+
+            if not isinstance(est, (Pipeline,FeatureUnion)):
+                return
+            steps = est.steps if isinstance(est, Pipeline) else est.transformer_list
+
             for i,(step_name,step) in enumerate(steps):
-                # Replace any Pipeline with _DFSGridSearchCVPipeline
-                if isinstance(step,Pipeline):
+
+                if isinstance(step, Pipeline):
                     pipe = _DFSGridSearchCVPipeline(step, params_steps[step_name], self.verbose)
                     steps[i] = (step_name,pipe)
-                    add_sub_dfs_pipelines(params_steps[step_name], pipe.steps)
+                    add_sub_dfs_pipelines(pipe, params_steps[step_name])
+                else:
+                    add_sub_dfs_pipelines(step, params_steps[step_name])
 
         # Search for any embedded Pipelines and replace them with _DFSGridSearchCVPipeline
-        add_sub_dfs_pipelines(self.param_grid, grid_estimator.steps)
+        add_sub_dfs_pipelines(grid_estimator, self.param_grid)
 
         cv = self.cv
         self.scorer_ = check_scoring(grid_estimator, scoring=self.scoring)
@@ -398,6 +409,8 @@ class PipelineGridSearchCV(GridSearchCV):
         self.best_params_ = best.parameters
         self.best_score_ = best.mean_validation_score
 
+        print("PipelineGridSearchCV: grid_estimator after fit: {}".format(grid_estimator))
+
         if self.refit:
             # fit the best estimator using the entire dataset
             # clone first to work around broken estimators
@@ -430,27 +443,47 @@ class _DFSParameterGrid(ParameterGrid):
         # Returns parameters in DFS order according to
         # the pipeline structure.
 
-        for p in self.param_grid:
-            # Sort for reproducibility.
-            sorted_items = sorted(p.items())
+        def extract_sub_stepnames(stepname):
+            step = self.pipeline.named_steps[stepname]
+            if isinstance(step, Pipeline):
+               return map(operator.itemgetter(0), step.steps)
+            elif isinstance(step, FeatureUnion):
+               return map(operator.itemgetter(0), step.transformer_list)
+            return []
 
-            items = []
-            # Ensure items are in the same order as steps
-            for step_name, _ in self.pipeline.steps:
-                # Assume estimator__param syntax of params.
-                for pname, pval in sorted_items:
-                    step, param = pname.split('__', 1)
-                    if step == step_name:
-                        items.append((pname, pval))
+        def cmp_func((pname1, _), (pname2, __)):
+            nested_stepnames1 = pname1.split('__')
+            nested_stepnames2 = pname2.split('__')
+            pipe_stepnames = map(operator.itemgetter(0), self.pipeline.steps)
+            for n1,n2 in itertools.izip_longest(nested_stepnames1[:-1], nested_stepnames2[:-1]):
+                if n1 is None:
+                    return 1
+                elif n2 is None:
+                    return -1
+                i1 = pipe_stepnames.index(n1)
+                i2 = pipe_stepnames.index(n2)
+                if i1 < i2:
+                    return -1
+                elif i1 > i2:
+                    return 1
+                pipe_stepnames = extract_sub_stepnames(pipe_stepnames[i1])
+                if len(pipe_stepnames) == 0:
+                    break
+
+            return 0
+
+        for p in self.param_grid:
+            # Sort for reproducibility (according to DFS order).
+            sorted_items = sorted(p.items(), cmp=cmp_func)
 
             # Now items appear in DFS order,
             # so itertools.product below will
             # return them in DFS order as well.
 
-            if not items:
+            if not sorted_items:
                 yield {}
             else:
-                keys, values = zip(*items)
+                keys, values = zip(*sorted_items)
                 for v in itertools.product(*values):
                     params = dict(zip(keys, v))
                     yield params
