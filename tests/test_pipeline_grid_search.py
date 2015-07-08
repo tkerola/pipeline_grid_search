@@ -5,6 +5,8 @@ Testing for pipeline_grid_search module.
 from __future__ import print_function
 from __future__ import division
 
+import time
+
 import numpy as np
 
 from sklearn.base import BaseEstimator, TransformerMixin, ClassifierMixin
@@ -279,7 +281,38 @@ def test_pipeline_grid_search8():
     perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False)
     # TODO: Update assert_n_calls_equal logic to work correctly with pipelines embedded in FeatureUnions.
 
-def perform_pipeline_case(parts, cv_params, assert_n_calls_equal=True):
+def test_pipeline_grid_search9():
+    # Test using a FeatureUnion with embedded Pipelines.
+    parts = [
+        create_mock_estimator("f0",[]),
+        FeatureUnion([
+            ('feat1', Pipeline([
+                ('f11', create_mock_estimator("f11", [("p1",0),("p2",2)])),
+                ])),
+            ('feat2', Pipeline([
+                ('f12', create_mock_estimator("f12", [("a",0)])),
+                ])),
+            ]),
+        create_mock_estimator("f1", [("p1",0),("p2",2)]),
+        create_mock_estimator("f2",[]),
+        create_mock_estimator("f3",[("c",0),("d",0)]),
+        create_mock_estimator("f4",[]),
+        create_mock_estimator("f5",[]),
+        create_mock_classifier("f11",[]),
+        ]
+
+    cv_params = [
+        ('FeatureUnion__feat1__f11__p1', [10,20]),
+        ('FeatureUnion__feat2__f12__a', [10,20,30]),
+        ('f1__p1', [10,20]),
+        ('f3__c', [10,20,30]),
+        ('f3__d', [10,20,30,40]),
+    ]
+
+    # Set assert_n_calls_equal to False, as we need to implement our custom counting of function calls in order to measure the call tests.
+    perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False, mode='file', cachedir='file_cache', datasetname='make_class')
+
+def perform_pipeline_case(parts, cv_params, assert_n_calls_equal=True, **pipelinegridsearchcv_kwargs):
     # tests a particular pipe and cv_params combination
 
     pipe = Pipeline([ (p.__class__.__name__, p) for p in parts ])
@@ -289,7 +322,7 @@ def perform_pipeline_case(parts, cv_params, assert_n_calls_equal=True):
 
     n_folds = 5
     n_jobs = 1
-    verbose = 0
+    verbose = 1
 
     # mock.MagicMock cannot be used since GridSearchCV resets each estimator using
     # clone() before each call to fit.
@@ -300,12 +333,15 @@ def perform_pipeline_case(parts, cv_params, assert_n_calls_equal=True):
     # Start PipelineGridSearchCV test here
     n_transform_calls = 0
     n_fit_calls = 0
-    model = PipelineGridSearchCV(pipe, dict(cv_params), cv=n_folds, verbose=verbose, n_jobs=n_jobs)
+    ideal_cv_time = time.time()
+    model = PipelineGridSearchCV(estimator=pipe, param_grid=dict(cv_params), cv=n_folds, verbose=verbose, n_jobs=n_jobs, **pipelinegridsearchcv_kwargs)
     model.fit(X,y)
+    ideal_cv_time = time.time() - ideal_cv_time
     print("model.best_estimator_: {}".format(model.best_estimator_))
     print("Counts (PipelineGridSearchCV)")
     print("n_fit_calls:",n_fit_calls)
     print("n_transform_calls:",n_transform_calls)
+    print("time to do grid search:",ideal_cv_time)
 
     n_ideal_fit_calls = calc_n_ideal_fit_calls(parts,cv_params,n_folds)
     n_ideal_transform_calls = calc_n_ideal_transform_calls(parts,cv_params,n_folds)
@@ -317,11 +353,14 @@ def perform_pipeline_case(parts, cv_params, assert_n_calls_equal=True):
     # Start GridSearchCV test here
     n_transform_calls = 0
     n_fit_calls = 0
+    naive_cv_time = time.time()
     model_naive = GridSearchCV(pipe, dict(cv_params), cv=n_folds, verbose=verbose, n_jobs=n_jobs)
     model_naive.fit(X,y)
+    naive_cv_time = time.time() - naive_cv_time
     print("Counts (GridSearchCV)")
     print("n_fit_calls:",n_fit_calls)
     print("n_transform_calls:",n_transform_calls)
+    print("time to do grid search:",naive_cv_time)
 
     n_param_combs = np.prod(map(lambda x: len(x[1]), cv_params))
     n_naive_fit_calls = n_param_combs * len(parts) * n_folds + len(parts)

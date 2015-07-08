@@ -13,8 +13,11 @@ These are also under a BSD 3-Clause license (see https://github.com/scikit-learn
 from __future__ import print_function
 from __future__ import division
 
+import time
 import itertools
 import operator
+import os
+import re
 from collections import Sized, defaultdict
 
 import numpy as np
@@ -28,11 +31,7 @@ from sklearn.metrics.scorer import check_scoring
 from sklearn.pipeline import Pipeline, FeatureUnion 
 from sklearn.utils.validation import _num_samples, indexable
 
-# Note: These counters do not work correctly with clone
-# and Parallel, as they get reset by each thread and clone.
-# n_fit_transform_calls = 0
-# n_score_transform_calls = 0
-
+from step_cache import StepCache
 
 def _get_params_steps(params):
     """
@@ -46,6 +45,154 @@ def _get_params_steps(params):
         params_steps[step][param] = pval
     return params_steps
 
+class _CacheGridSearchCVPipeline(Pipeline):
+
+    """
+    This pipeline keeps a cache or previous
+    computations in order to avoid repeated
+    computation during grid search.
+
+    Note that this estimator is not meant to
+    be used outside this module, as it breaks
+    some common estimator assumptions in order
+    to avoid repeated computation.
+    """
+
+    def __init__(self, steps, cache, verbose=0):
+        if isinstance(steps, Pipeline):
+            super(_CacheGridSearchCVPipeline, self).__init__(steps.steps)
+        else:
+            super(_CacheGridSearchCVPipeline, self).__init__(steps)
+        self.grid_search_mode = False
+        self.verbose = verbose
+
+        self.cache = cache
+
+    def store_cv_data(self, cv_params, cv_foldname):
+        self.cv_params_steps = _get_params_steps(cv_params)
+        self.cv_foldname = cv_foldname
+
+        for name,transform in self.steps:
+            if isinstance(transform, _CacheGridSearchCVPipeline):
+                transform.store_cv_data(cv_params, cv_foldname)
+            elif isinstance(transform, FeatureUnion):
+                for fu_name,fu_transform in transform.transformer_list:
+                    # NOTE: This should be made into a recursive check function.
+                    if isinstance(fu_transform, _CacheGridSearchCVPipeline):
+                        fu_transform.store_cv_data(cv_params, cv_foldname)
+
+    def format_step_params(self, name):
+        return map(lambda (a,b): ('{}__{}'.format(name, a), b), sorted(self.cv_params_steps[name].items()))
+
+    def _get_start_state(self, X, foldname):
+        params_tail = []
+        start_step = -1
+
+        Xt = X
+
+        # Find out how deep into the pipeline we have
+        # existing cached values.
+        for step_index,(name, transform) in enumerate(self.steps[:-1]):
+
+            step_params = self.format_step_params(name)
+            params_tail.extend(step_params)
+
+            if not self.cache.is_cached(foldname, params_tail, name):
+                start_step = step_index
+                params_tail = params_tail[:-len(step_params)]
+                if step_index == 0:
+                    Xt = X
+                else:
+                    # Load cache of previous step
+                    Xt = self.cache.load_outdata(foldname, params_tail, self.steps[step_index-1][0])
+                break
+        
+        return Xt, start_step, params_tail
+
+    def clone_steps(self):
+        """
+        Clones the steps of this pipeline, while
+        leaving the current instance of this pipeline
+        intact.
+        """
+        for i in xrange(len(self.steps)):
+            subest_name, subest = self.steps[i]
+            if isinstance(subest, _CacheGridSearchCVPipeline):
+                subest.clone_steps()
+            elif isinstance(subest, FeatureUnion):
+                for j in xrange(len(subest.transformer_list)):
+                    fu_subest_name, fu_subest = subest.transformer_list[j]
+                    if isinstance(fu_subest, _CacheGridSearchCVPipeline):
+                        fu_subest.clone_steps()
+                    else:
+                        fu_subest = clone(fu_subest)
+                        subest.transformer_list[j] = (fu_subest_name, fu_subest)
+            else:
+                subest = clone(subest)
+                self.steps[i] = (subest_name, subest)
+                self.named_steps[subest_name] = subest
+
+    def _pre_transform(self, X, y=None, **fit_params):
+        # This method is only called from fit.
+        # assume that this function is only called
+        # on the train fold during CV
+        foldname = self.cv_foldname + '_train'
+
+        fit_params_steps = _get_params_steps(fit_params)
+        Xt, start_step, params_tail = self._get_start_state(X, foldname)
+
+        # Start computation from the non-cached step
+        for name, transform in self.steps[start_step:-1]:
+
+            step_params = self.format_step_params(name)
+            params_tail.extend(step_params)
+
+            fit_time = time.time()
+            transform.fit(Xt, y, **fit_params_steps[name])
+            fit_time = time.time() - fit_time
+
+            transform_time = time.time()
+            Xt = transform.transform(Xt)
+            transform_time = time.time() - transform_time
+
+            self.cache.save_outdata(foldname, params_tail, name, fit_time, transform_time, Xt)
+
+        return Xt, fit_params_steps[self.steps[-1][0]]
+
+    def score(self, X, y=None):
+        # assume that this function is only called
+        # on the test fold during CV
+        foldname = self.cv_foldname + '_test'
+
+        Xt, start_step, params_tail = self._get_start_state(X, foldname)
+
+        # Start computation from the non-cached step
+        for name, transform in self.steps[start_step:-1]:
+
+            step_params = self.format_step_params(name)
+            params_tail.extend(step_params)
+
+            fit_time = 0.
+
+            transform_time = time.time()
+            Xt = transform.transform(Xt)
+            transform_time = time.time() - transform_time
+
+            self.cache.save_outdata(foldname, params_tail, name, fit_time, transform_time, Xt)
+
+        return self.steps[-1][-1].score(Xt, y)
+
+    def get_params(self, deep=True):
+        out = super(Pipeline, self).get_params(deep=False)
+        if not deep:
+            return out
+        else:
+            out.update(self.named_steps.copy())
+            for name, step in six.iteritems(self.named_steps):
+                for key, value in six.iteritems(step.get_params(deep=True)):
+                    out['%s__%s' % (name, key)] = value
+            return out
+        
 
 class _DFSGridSearchCVPipeline(Pipeline):
 
@@ -148,10 +295,11 @@ class _DFSGridSearchCVPipeline(Pipeline):
 
         return Xt, start_step
 
-    def store_cv_params(self, **cv_params):
+    def store_cv_data(self, cv_params, cv_foldname):
         if self.cv_params_steps:  # Keep track of the previous cv params
             self.cv_params_steps_prev = self.cv_params_steps
         self.cv_params_steps = _get_params_steps(cv_params)
+        self.cv_foldname = cv_foldname
 
     def clone_steps(self):
         """
@@ -161,8 +309,8 @@ class _DFSGridSearchCVPipeline(Pipeline):
         leaving the current instance of this pipeline
         intact.
         """
-        # start_step depends on store_cv_params,
-        # so it should be called after store_cv_params
+        # start_step depends on store_cv_data,
+        # so it should be called after store_cv_data
         start_step = self._get_start_state()
         for i in xrange(start_step, len(self.steps)):
             subest_name, subest = self.steps[i]
@@ -224,7 +372,7 @@ class _DFSGridSearchCVPipeline(Pipeline):
 
 def _fit_and_score_pipeline_grid_fold(
         grid_estimator, X, y, scorer,
-        train, test, verbose,
+        fold_index, train, test, verbose,
         parameter_iterable, fit_params,
         return_parameters=False, error_score='raise'):
     """
@@ -253,7 +401,7 @@ def _fit_and_score_pipeline_grid_fold(
             # as the lists fit_transform_history etc. are
             # reset each iteration.
             # Instead, just clone the subestimators.
-            grid_estimator.store_cv_params(**parameters)
+            grid_estimator.store_cv_data(parameters, "f{}".format(fold_index))
 
             # Note that we use a custom clone method here
             # that skips cloning _DFSGridSearchCVPipeline,
@@ -268,13 +416,21 @@ def _fit_and_score_pipeline_grid_fold(
             ret = _fit_and_score(grid_estimator, X, y, scorer,
                                  train, test, verbose, parameters, fit_params,
                                  False, return_parameters, error_score)
-        except:
+        except Exception as exception:
             # In case fit threw an exception, store the result, with NaNs.
             ret = []
             X_test, y_test = _safe_split(grid_estimator, X, y, test, train)
             ret.extend([np.float("NaN"), _num_samples(X_test), np.float("NaN")])
             if return_parameters:
                 ret.append(parameters)
+
+            # Print exception output for debugging/logging.
+            print("Caught exception during fit. Traceback below:")
+            print("=============================================")
+            import traceback
+            traceback.print_exc()
+
+            raise exception
         finally:
             out.append(ret)
 
@@ -285,12 +441,20 @@ def _fit_and_score_pipeline_grid_fold(
 
 class PipelineGridSearchCV(GridSearchCV):
 
-    def __init__(self, *args, **kwargs):
-        super(PipelineGridSearchCV, self).__init__(*args, **kwargs)
+    def __init__(self, estimator, param_grid, mode='dfs', cachedir=None, datasetname=None,
+                 *args, **kwargs):
+        super(PipelineGridSearchCV, self).__init__(estimator, param_grid, *args, **kwargs)
 
         if not isinstance(self.estimator, Pipeline):
             raise ValueError(
                 "PipelineGridSearchCV only accepts Pipeline as its estimator.")
+
+        self.mode = mode
+        if mode == 'file':
+            if cachedir is None:
+                raise ValueError("Must specify cachedir when mode is 'file'.")
+        self.cachedir = cachedir
+        self.datasetname = datasetname
 
     def fit(self, X, y=None):
         return self._fit(X, y,
@@ -299,10 +463,31 @@ class PipelineGridSearchCV(GridSearchCV):
     def _fit(self, X, y, parameter_iterable):
         """Actual fitting,  performing the search over parameters."""
 
-        # Make the supplied Pipeline _DFSGridSearchCVPipeline
-        # for doing the grid_search
-        grid_estimator = _DFSGridSearchCVPipeline(
-            clone(self.estimator), self.param_grid, self.verbose)
+        if self.mode == 'dfs':
+            # Make the supplied Pipeline a _DFSGridSearchCVPipeline
+            # for doing the grid_search
+            grid_estimator = _DFSGridSearchCVPipeline(
+                clone(self.estimator), self.param_grid, self.verbose)
+        elif self.mode == 'file':
+            stepcache = StepCache(self.cachedir, self.datasetname)
+            grid_estimator = _CacheGridSearchCVPipeline(clone(self.estimator), stepcache, self.verbose)
+            if not os.path.isdir(self.cachedir):
+                if os.path.isfile(self.cachedir):
+                    raise ValueError("Specified cachedir is a file. Cannot overwrite {}".format(self.cachedir))
+                os.makedirs(self.cachedir)
+            else:
+                pattern_regex = r'{}-.*\.(ftc|npy)'.format(re.escape(self.datasetname))
+                pattern = re.compile(pattern_regex)
+                nfound = 0
+                for f in os.listdir(self.cachedir):
+                    if pattern.search(f):
+                        p = os.path.join(self.cachedir, f)
+                        os.remove(os.path.join(self.cachedir, f))
+                        nfound += 1
+                if self.verbose > 0:
+                    print("Removed {} existing files matching '{}' in cache dir ({}).".format(nfound, pattern_regex, self.cachedir))
+        else:
+            raise ValueError("Invalid mode specified.")
 
         def add_sub_dfs_pipelines(est, params):
             try:
@@ -317,13 +502,16 @@ class PipelineGridSearchCV(GridSearchCV):
             for i,(step_name,step) in enumerate(steps):
 
                 if isinstance(step, Pipeline):
-                    pipe = _DFSGridSearchCVPipeline(step, params_steps[step_name], self.verbose)
+                    if self.mode == 'dfs':
+                        pipe = _DFSGridSearchCVPipeline(step, params_steps[step_name], self.verbose)
+                    else:
+                        pipe = _CacheGridSearchCVPipeline(step, stepcache, self.verbose)
                     steps[i] = (step_name,pipe)
                     add_sub_dfs_pipelines(pipe, params_steps[step_name])
                 else:
                     add_sub_dfs_pipelines(step, params_steps[step_name])
 
-        # Search for any embedded Pipelines and replace them with _DFSGridSearchCVPipeline
+        # Search for any embedded Pipelines and replace them with a _*GridSearchCVPipeline
         add_sub_dfs_pipelines(grid_estimator, self.param_grid)
 
         cv = self.cv
@@ -360,10 +548,10 @@ class PipelineGridSearchCV(GridSearchCV):
         )(
             delayed(_fit_and_score_pipeline_grid_fold)(
                 clone(grid_estimator), X, y, self.scorer_,
-                train, test, self.verbose, parameter_iterable,
+                fold_index, train, test, self.verbose, parameter_iterable,
                 self.fit_params, return_parameters=True,
                 error_score=self.error_score)
-            for train, test in cv)
+            for fold_index, (train, test) in enumerate(cv))
 
         # Out is a list of triplet: score, estimator, n_test_samples
         n_fits = 0
@@ -416,7 +604,7 @@ class PipelineGridSearchCV(GridSearchCV):
             # clone first to work around broken estimators
             # Note that we use self.estimator here instead
             # of grid_estimator in order to keep self.best_estimator_
-            # as a normal Pipeline. _DFSGridSearchCVPipeline is
+            # as a normal Pipeline. _*GridSearchCVPipeline is
             # only useful when doing grid search.
             best_estimator = clone(self.estimator).set_params(
                 **best.parameters)
@@ -435,9 +623,10 @@ class _DFSParameterGrid(ParameterGrid):
     in depth first search (DFS) order.
     """
 
-    def __init__(self, param_grid, pipeline):
+    def __init__(self, param_grid, pipeline, enumerate_params=False):
         super(_DFSParameterGrid, self).__init__(param_grid)
         self.pipeline = pipeline
+        self.enumerate_params = enumerate_params
 
     def __iter__(self):
         # Returns parameters in DFS order according to
