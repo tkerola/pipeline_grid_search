@@ -234,7 +234,7 @@ def test_pipeline_grid_search6():
     perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False)
 
 def test_pipeline_grid_search7():
-    # Test that the number of estimator calls is less than the ones for regular GridSearchCV
+    # Test that _DFSGridSearchCVPipeline gives the same selected parameters as the normal GridSearchCV
     parts = [
         PCA(),
         Normalizer(),
@@ -288,9 +288,13 @@ def test_pipeline_grid_search9():
         FeatureUnion([
             ('feat1', Pipeline([
                 ('f11', create_mock_estimator("f11", [("p1",0),("p2",2)])),
+                ('f111', create_mock_estimator("f111", [("p1",0),("p2",2)])),
+                ('f112', create_mock_estimator("f112", [("p1",0),("p2",2)])),
                 ])),
             ('feat2', Pipeline([
                 ('f12', create_mock_estimator("f12", [("a",0)])),
+                ('f121', create_mock_estimator("f121", [("a",0)])),
+                ('f122', create_mock_estimator("f122", [("a",0)])),
                 ])),
             ]),
         create_mock_estimator("f1", [("p1",0),("p2",2)]),
@@ -303,13 +307,105 @@ def test_pipeline_grid_search9():
 
     cv_params = [
         ('FeatureUnion__feat1__f11__p1', [10,20]),
-        ('FeatureUnion__feat2__f12__a', [10,20,30]),
+        #('FeatureUnion__feat1__f111__p1', [10,20]),
+        ('FeatureUnion__feat1__f112__p1', [10,20]),
+        #('FeatureUnion__feat2__f12__a', [10,20,30]),
+        #('FeatureUnion__feat2__f121__a', [10,20,30]),
+        ('FeatureUnion__feat2__f122__a', [10,20,30]),
         ('f1__p1', [10,20]),
         ('f3__c', [10,20,30]),
         ('f3__d', [10,20,30,40]),
     ]
 
     # Set assert_n_calls_equal to False, as we need to implement our custom counting of function calls in order to measure the call tests.
+    perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False, mode='file', cachedir='file_cache', datasetname='make_class')
+
+def test_pipeline_grid_search10():
+    # Test if _DFSGridSearchCVPipeline works with submerged pipelines.
+    parts = [
+        create_mock_estimator("f0",[]),
+        FeatureUnion([
+            ('feat1', Pipeline([
+                ('f11', create_mock_estimator("f11", [("p1",0),("p2",2)])),
+                ('f111', create_mock_estimator("f111", [("p1",0),("p2",2)])),
+                ('f112', create_mock_estimator("f112", [("p1",0),("p2",2)])),
+                ])),
+            ('feat2', Pipeline([
+                ('f12', create_mock_estimator("f12", [("a",0)])),
+                ('f121', create_mock_estimator("f121", [("a",0)])),
+                ('f122', create_mock_estimator("f122", [("a",0)])),
+                ])),
+            ]),
+        PCA(),
+        Normalizer(),
+        SVC(),
+        ]
+
+    cv_params = [
+        ('FeatureUnion__feat1__f11__p1', [10,20]),
+        #('FeatureUnion__feat1__f111__p1', [10,20]),
+        ('FeatureUnion__feat1__f112__p1', [10,20]),
+        #('FeatureUnion__feat2__f12__a', [10,20,30]),
+        #('FeatureUnion__feat2__f121__a', [10,20,30]),
+        ('FeatureUnion__feat2__f122__a', [10,20,30]),
+        ('PCA__n_components', [3,5,7]),
+        ('Normalizer__norm', ['l2']),
+        ('SVC__C', [1.,10.,100.,1000.]),
+    ]
+
+    # Set assert_n_calls_equal to False, as we need to implement our custom counting of function calls in order to measure the call tests.
+    perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False, mode='dfs', cachedir='file_cache', datasetname='make_class')
+
+def test_pipeline_grid_search11():
+    # Test if _CacheGridSearchCVPipeline works with submerged pipelines.
+    parts = [
+        create_mock_estimator("f0",[]),
+        FeatureUnion([
+            ('feat1', Pipeline([
+                ('f11', create_mock_estimator("f11", [("p1",0),("p2",2)])),
+                ('f111', create_mock_estimator("f111", [("p1",0),("p2",2)])),
+                ('f112', create_mock_estimator("f112", [("p1",0),("p2",2)])),
+                ])),
+            ('feat2', Pipeline([
+                ('f12', create_mock_estimator("f12", [("a",0)])),
+                ('f121', create_mock_estimator("f121", [("a",0)])),
+                ('f122', create_mock_estimator("f122", [("a",0)])),
+                ])),
+            ]),
+        PCA(),
+        Normalizer(),
+        SVC(),
+        ]
+
+    cv_params = [
+        ('FeatureUnion__feat1__f11__p1', [10,20]),
+        #('FeatureUnion__feat1__f111__p1', [10,20]),
+        ('FeatureUnion__feat1__f112__p1', [10,20]),
+        #('FeatureUnion__feat2__f12__a', [10,20,30]),
+        #('FeatureUnion__feat2__f121__a', [10,20,30]),
+        ('FeatureUnion__feat2__f122__a', [10,20,30]),
+        ('PCA__n_components', [3,5,7]),
+        ('Normalizer__norm', ['l2']),
+        ('SVC__C', [1.,10.,100.,1000.]),
+    ]
+
+    # Set assert_n_calls_equal to False, as we need to implement our custom counting of function calls in order to measure the call tests.
+    perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False, mode='file', cachedir='file_cache', datasetname='make_class')
+
+def test_pipeline_grid_search12():
+    # Test that _DFSGridSearchCVPipeline gives the same selected parameters as the normal GridSearchCV
+    parts = [
+        PCA(),
+        Normalizer(),
+        SVC()
+        ]
+
+    cv_params = [
+        ('PCA__n_components', [3,5,7]),
+        ('Normalizer__norm', ['l2']),
+        ('SVC__C', [1.,10.,100.,1000.]),
+    ]
+
     perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False, mode='file', cachedir='file_cache', datasetname='make_class')
 
 def perform_pipeline_case(parts, cv_params, assert_n_calls_equal=True, **pipelinegridsearchcv_kwargs):
@@ -370,6 +466,8 @@ def perform_pipeline_case(parts, cv_params, assert_n_calls_equal=True, **pipelin
         assert_equal(n_transform_calls, n_naive_transform_calls)
 
     # Make sure that PipelineGridSearchCV and GridSearchCV return the same result.
-    assert_equal(model_naive.best_score_, model.best_score_)
     assert_equal(model_naive.best_params_, model.best_params_)
+    assert_equal(model_naive.best_score_, model.best_score_)
+    print("best_params_:",model.best_params_)
+    print("best_score_:",model.best_score_)
 

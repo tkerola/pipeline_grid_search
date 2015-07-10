@@ -7,13 +7,16 @@ import json
 import numpy as np
 
 class StepCache(object):
-    def __init__(self, cachedir, datasetname=None):
+    def __init__(self, cachedir, datasetname=None, use_memory_cache=True):
         super(StepCache, self).__init__()
         self.cachedir = cachedir
         if datasetname is None:
             self.datasetname = self.cachedir.split('/')[-1]
         else:
             self.datasetname = datasetname
+        self.seen_params_tails = {}
+        self.seen_outdata = {}
+        self.use_memory_cache = use_memory_cache
 
     def get_cache_filename(self, foldname, params_tail, stepname):
         """
@@ -33,16 +36,21 @@ class StepCache(object):
 
     def is_cached(self, foldname, params_tail, stepname):
         filename = self.get_cache_filename(foldname, params_tail, stepname)
-        try:
-            with open(filename, 'r') as f:
-                d = json.load(f)
-        except IOError:
-            return False
-        # Make extra check to avoid false positives due to hash collisions
-        cached_params_tail = d.get('params_tail')
+        # For speed, first check memory
+        cached_params_tail = self.seen_params_tails.get(filename) if self.use_memory_cache else None
         if cached_params_tail is None:
-            return False
-        cached_params_tail = map(tuple, cached_params_tail)
+            try:
+                with open(filename, 'r') as f:
+                    d = json.load(f)
+            except IOError:
+                return False
+            # Make extra check to avoid false positives due to hash collisions
+            cached_params_tail = d.get('params_tail')
+            if cached_params_tail is None:
+                return False
+            cached_params_tail = map(tuple, cached_params_tail)
+            if self.use_memory_cache:
+                self.seen_params_tails[filename] = cached_params_tail
 
         if cached_params_tail == params_tail:
             return True
@@ -52,16 +60,20 @@ class StepCache(object):
 
     def load_outdata(self, foldname, params_tail, stepname):
         filename = self.get_cache_filename(foldname, params_tail, stepname)
-        try:
-            with open(filename, 'r') as f:
-                d = json.load(f)
-        except IOError as ioe:
-            print("Error: Cache file does not exist.")
-            raise ioe
-        outdata_filename = d.get('outdata_filename')
-        if outdata_filename is None:
-            raise ValueError('outdata_filename is not specified in cache file {}'.format(filename))
-        X = np.load(outdata_filename)
+        X = self.seen_outdata.get(filename) if self.use_memory_cache else None
+        if X is None:
+            try:
+                with open(filename, 'r') as f:
+                    d = json.load(f)
+            except IOError as ioe:
+                print("Error: Cache file does not exist.")
+                raise ioe
+            outdata_filename = d.get('outdata_filename')
+            if outdata_filename is None:
+                raise ValueError('outdata_filename is not specified in cache file {}'.format(filename))
+            X = np.load(outdata_filename)
+            if self.use_memory_cache:
+                self.seen_outdata[filename] = X # NOTE: Add pruning of dict once we store too many elements? (limit memory usage)
         return X
 
     def save_outdata(self, foldname, params_tail, stepname, fit_time, transform_time, X):

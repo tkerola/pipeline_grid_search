@@ -21,14 +21,15 @@ import re
 from collections import Sized, defaultdict
 
 import numpy as np
+from scipy import sparse
 
 from sklearn.base import is_classifier, clone, BaseEstimator
-from sklearn.cross_validation import check_cv, _fit_and_score, _safe_split
+from sklearn.cross_validation import check_cv, _safe_split, _score
 from sklearn.externals.joblib import Parallel, delayed
 from sklearn.externals import six
 from sklearn.grid_search import GridSearchCV, ParameterGrid, _CVScoreTuple
 from sklearn.metrics.scorer import check_scoring
-from sklearn.pipeline import Pipeline, FeatureUnion 
+from sklearn.pipeline import Pipeline, FeatureUnion, _fit_one_transformer, _fit_transform_one, _transform_one
 from sklearn.utils.validation import _num_samples, indexable
 
 from step_cache import StepCache
@@ -45,7 +46,22 @@ def _get_params_steps(params):
         params_steps[step][param] = pval
     return params_steps
 
-class _CacheGridSearchCVPipeline(Pipeline):
+class _CVDataMixin(object):
+
+    def store_cv_data(self, cv_params, cv_foldname):
+        """
+        Stores cross-validation data that the estimator
+        should be aware of before calling fit/transform/score.
+        """
+        if hasattr(self, 'cv_params_steps'):  # Keep track of the previous cv params
+            self.cv_params_steps_prev = self.cv_params_steps
+        self.cv_params_steps = _get_params_steps(cv_params)
+        self.cv_foldname = cv_foldname
+
+    def set_foldname(self, foldname):
+        self.cv_foldname = foldname
+
+class _CacheGridSearchCVPipeline(Pipeline, _CVDataMixin):
 
     """
     This pipeline keeps a cache or previous
@@ -63,23 +79,9 @@ class _CacheGridSearchCVPipeline(Pipeline):
             super(_CacheGridSearchCVPipeline, self).__init__(steps.steps)
         else:
             super(_CacheGridSearchCVPipeline, self).__init__(steps)
-        self.grid_search_mode = False
         self.verbose = verbose
 
         self.cache = cache
-
-    def store_cv_data(self, cv_params, cv_foldname):
-        self.cv_params_steps = _get_params_steps(cv_params)
-        self.cv_foldname = cv_foldname
-
-        for name,transform in self.steps:
-            if isinstance(transform, _CacheGridSearchCVPipeline):
-                transform.store_cv_data(cv_params, cv_foldname)
-            elif isinstance(transform, FeatureUnion):
-                for fu_name,fu_transform in transform.transformer_list:
-                    # NOTE: This should be made into a recursive check function.
-                    if isinstance(fu_transform, _CacheGridSearchCVPipeline):
-                        fu_transform.store_cv_data(cv_params, cv_foldname)
 
     def format_step_params(self, name):
         return map(lambda (a,b): ('{}__{}'.format(name, a), b), sorted(self.cv_params_steps[name].items()))
@@ -147,13 +149,22 @@ class _CacheGridSearchCVPipeline(Pipeline):
             step_params = self.format_step_params(name)
             params_tail.extend(step_params)
 
-            fit_time = time.time()
-            transform.fit(Xt, y, **fit_params_steps[name])
-            fit_time = time.time() - fit_time
+            if isinstance(transform, _CVDataMixin):
+                transform.store_cv_data(self.cv_params_steps[name], self.cv_foldname)
 
-            transform_time = time.time()
-            Xt = transform.transform(Xt)
-            transform_time = time.time() - transform_time
+            if hasattr(transform, "fit_transform"):
+                fit_time = time.time()
+                Xt = transform.fit_transform(Xt, y, **fit_params_steps[name])
+                fit_time = time.time() - fit_time
+                transform_time = None
+            else:
+                fit_time = time.time()
+                transform.fit(Xt, y, **fit_params_steps[name])
+                fit_time = time.time() - fit_time
+
+                transform_time = time.time()
+                Xt = transform.transform(Xt)
+                transform_time = time.time() - transform_time
 
             self.cache.save_outdata(foldname, params_tail, name, fit_time, transform_time, Xt)
 
@@ -172,7 +183,7 @@ class _CacheGridSearchCVPipeline(Pipeline):
             step_params = self.format_step_params(name)
             params_tail.extend(step_params)
 
-            fit_time = 0.
+            fit_time = None
 
             transform_time = time.time()
             Xt = transform.transform(Xt)
@@ -194,8 +205,7 @@ class _CacheGridSearchCVPipeline(Pipeline):
             return out
         
 
-class _DFSGridSearchCVPipeline(Pipeline):
-
+class _DFSGridSearchCVPipeline(Pipeline, _CVDataMixin):
     """
     This pipeline assumes that when doing
     grid search, the parameters are being
@@ -215,7 +225,6 @@ class _DFSGridSearchCVPipeline(Pipeline):
         self.param_grid = param_grid
         self.verbose = verbose
 
-        self.grid_search_mode = False
         self.cv_params_counts = {}
         param_grid_steps = _get_params_steps(param_grid)
         # Store the maximum of the number of params to grid search
@@ -246,8 +255,6 @@ class _DFSGridSearchCVPipeline(Pipeline):
         - Xt: The feature at step start_step (if X is not None).
         - start_step: The starting step.
         """
-        if not self.grid_search_mode:
-            return X, 0
 
         start_step = 0
         if self.cv_params_steps_prev:
@@ -295,12 +302,6 @@ class _DFSGridSearchCVPipeline(Pipeline):
 
         return Xt, start_step
 
-    def store_cv_data(self, cv_params, cv_foldname):
-        if self.cv_params_steps:  # Keep track of the previous cv params
-            self.cv_params_steps_prev = self.cv_params_steps
-        self.cv_params_steps = _get_params_steps(cv_params)
-        self.cv_foldname = cv_foldname
-
     def clone_steps(self):
         """
         Clones the steps of this pipeline,
@@ -328,13 +329,15 @@ class _DFSGridSearchCVPipeline(Pipeline):
 
         # Restart transform from step i (it has new params)
         for name, transform in self.steps[start_step:-1]:
+            if isinstance(transform, _CVDataMixin):
+                transform.store_cv_data(self.cv_params_steps[name], self.cv_foldname)
+
             if hasattr(transform, "fit_transform"):
                 Xt = transform.fit_transform(Xt, y, **fit_params_steps[name])
             else:
                 Xt = transform.fit(Xt, y, **fit_params_steps[name]) \
                               .transform(Xt)
-            if self.grid_search_mode:
-                self.fit_transform_history.append(Xt)
+            self.fit_transform_history.append(Xt)
 
             # global n_fit_transform_calls
             # n_fit_transform_calls += 1
@@ -348,8 +351,7 @@ class _DFSGridSearchCVPipeline(Pipeline):
         for name, transform in self.steps[start_step:-1]:
             Xt = transform.transform(Xt)
 
-            if self.grid_search_mode:
-                self.score_transform_history.append(Xt)
+            self.score_transform_history.append(Xt)
 
             # global n_score_transform_calls
             # n_score_transform_calls += 1
@@ -386,8 +388,6 @@ def _fit_and_score_pipeline_grid_fold(
     # that grid_estimator.fit is only called on X_train and
     # grid_estimator.score is only called on X_test.
 
-    grid_estimator.grid_search_mode = True
-
     if verbose > 1:
         print("_fit_and_score_pipeline_grid_fold")
 
@@ -413,8 +413,8 @@ def _fit_and_score_pipeline_grid_fold(
             grid_estimator.clone_steps()
             grid_estimator.set_params(**parameters)  # Set params of subestimators
 
-            ret = _fit_and_score(grid_estimator, X, y, scorer,
-                                 train, test, verbose, parameters, fit_params,
+            ret = _pipeline_grid_search_fit_and_score(grid_estimator, X, y, scorer,
+                                 train, test, verbose, parameters, fit_params, fold_index,
                                  False, return_parameters, error_score)
         except Exception as exception:
             # In case fit threw an exception, store the result, with NaNs.
@@ -433,8 +433,6 @@ def _fit_and_score_pipeline_grid_fold(
             raise exception
         finally:
             out.append(ret)
-
-    grid_estimator.grid_search_mode = False
 
     return out
 
@@ -508,6 +506,10 @@ class PipelineGridSearchCV(GridSearchCV):
                         pipe = _CacheGridSearchCVPipeline(step, stepcache, self.verbose)
                     steps[i] = (step_name,pipe)
                     add_sub_dfs_pipelines(pipe, params_steps[step_name])
+                elif isinstance(step, FeatureUnion):
+                    fu = _GridSearchCVFeatureUnion(step.transformer_list, step.n_jobs, step.transformer_weights)
+                    steps[i] = (step_name, fu)
+                    add_sub_dfs_pipelines(fu, params_steps[step_name])
                 else:
                     add_sub_dfs_pipelines(step, params_steps[step_name])
 
@@ -632,8 +634,7 @@ class _DFSParameterGrid(ParameterGrid):
         # Returns parameters in DFS order according to
         # the pipeline structure.
 
-        def extract_sub_stepnames(stepname):
-            step = self.pipeline.named_steps[stepname]
+        def extract_sub_stepnames(step):
             if isinstance(step, Pipeline):
                return map(operator.itemgetter(0), step.steps)
             elif isinstance(step, FeatureUnion):
@@ -648,6 +649,7 @@ class _DFSParameterGrid(ParameterGrid):
             param1 = parts1[-1]
             param2 = parts2[-1]
             pipe_stepnames = map(operator.itemgetter(0), self.pipeline.steps)
+            step = self.pipeline
             for n1,n2 in itertools.izip_longest(nested_stepnames1, nested_stepnames2):
                 if n1 is None:
                     return 1
@@ -659,7 +661,13 @@ class _DFSParameterGrid(ParameterGrid):
                     return -1
                 elif i1 > i2:
                     return 1
-                pipe_stepnames = extract_sub_stepnames(pipe_stepnames[i1])
+                if isinstance(step, Pipeline):
+                    step = step.named_steps[pipe_stepnames[i1]]
+                elif isinstance(step, FeatureUnion):
+                    step = step.transformer_list[i1][1]
+                else:
+                    raise ValueError("Unsupported subestimator: {}".format(step))
+                pipe_stepnames = extract_sub_stepnames(step)
                 if len(pipe_stepnames) == 0:
                     break
 
@@ -682,3 +690,239 @@ class _DFSParameterGrid(ParameterGrid):
                     params = dict(zip(keys, v))
                     yield params
 
+def _pipeline_grid_search_fit_one_transformer(transformer, X, y, parameters, foldname):
+    if isinstance(transformer, (_DFSGridSearchCVPipeline, _CacheGridSearchCVPipeline)):
+        transformer.store_cv_data(parameters, foldname)
+        transformer.clone_steps()
+        transformer.set_params(**parameters)
+
+    return _fit_one_transformer(transformer, X, y)
+
+def _pipeline_grid_search_fit_transform_one(transformer, name, X, y, transformer_weights,
+                        parameters, foldname,
+                       **fit_params):
+    if isinstance(transformer, (_DFSGridSearchCVPipeline, _CacheGridSearchCVPipeline)):
+        transformer.store_cv_data(parameters, foldname)
+        transformer.clone_steps()
+        transformer.set_params(**parameters)
+
+    return _fit_transform_one(transformer, name, X, y, transformer_weights, **fit_params)
+
+def _pipeline_grid_search_transform_one(transformer, name, X, transformer_weights, parameters, foldname):
+    if isinstance(transformer, (_DFSGridSearchCVPipeline, _CacheGridSearchCVPipeline)):
+        transformer.store_cv_data(parameters, foldname)
+        transformer.clone_steps()
+        transformer.set_params(**parameters)
+
+    return _transform_one(transformer, name, X, transformer_weights)
+
+class _GridSearchCVFeatureUnion(FeatureUnion, _CVDataMixin):
+    """
+    A FeatureUnion that calls handles embedded _*GridSearchCVPipeline
+    estimators correctly.
+
+    Note: This class should never be used directly. Only by PipelineGridSearchCV.
+    """
+    def __init__(self, transformer_list, n_jobs=1, transformer_weights=None):
+        super(_GridSearchCVFeatureUnion, self).__init__(transformer_list, n_jobs, transformer_weights)
+
+    def fit(self, X, y=None):
+        """Fit all transformers using X.
+
+        Parameters
+        ----------
+        X : array-like or sparse matrix, shape (n_samples, n_features)
+            Input data, used to fit transformers.
+        """
+        transformers = Parallel(n_jobs=self.n_jobs)(
+            delayed(_pipeline_grid_search_fit_one_transformer)(trans, X, y, self.cv_params_steps[name], self.cv_foldname)
+            for name, trans in self.transformer_list)
+        self._update_transformer_list(transformers)
+        return self
+
+    def fit_transform(self, X, y=None, **fit_params):
+        """Fit all transformers using X, transform the data and concatenate
+        results.
+
+        Parameters
+        ----------
+        X : array-like or sparse matrix, shape (n_samples, n_features)
+            Input data to be transformed.
+
+        Returns
+        -------
+        X_t : array-like or sparse matrix, shape (n_samples, sum_n_components)
+            hstack of results of transformers. sum_n_components is the
+            sum of n_components (output dimension) over transformers.
+        """
+        result = Parallel(n_jobs=self.n_jobs)(
+            delayed(_pipeline_grid_search_fit_transform_one)(trans, name, X, y,
+                                        self.transformer_weights,
+                                        self.cv_params_steps[name], self.cv_foldname,
+                                        **fit_params)
+            for name, trans in self.transformer_list)
+
+        Xs, transformers = zip(*result)
+        self._update_transformer_list(transformers)
+        if any(sparse.issparse(f) for f in Xs):
+            Xs = sparse.hstack(Xs).tocsr()
+        else:
+            Xs = np.hstack(Xs)
+        return Xs
+
+    def transform(self, X):
+        """Transform X separately by each transformer, concatenate results.
+
+        Parameters
+        ----------
+        X : array-like or sparse matrix, shape (n_samples, n_features)
+            Input data to be transformed.
+
+        Returns
+        -------
+        X_t : array-like or sparse matrix, shape (n_samples, sum_n_components)
+            hstack of results of transformers. sum_n_components is the
+            sum of n_components (output dimension) over transformers.
+        """
+        Xs = Parallel(n_jobs=self.n_jobs)(
+            delayed(_pipeline_grid_search_transform_one)(trans, name, X, self.transformer_weights, self.cv_params_steps[name], self.cv_foldname)
+            for name, trans in self.transformer_list)
+        if any(sparse.issparse(f) for f in Xs):
+            Xs = sparse.hstack(Xs).tocsr()
+        else:
+            Xs = np.hstack(Xs)
+        return Xs
+
+
+def _pipeline_grid_search_fit_and_score(estimator, X, y, scorer, train, test, verbose,
+                   parameters, fit_params, fold_index, return_train_score=False,
+                   return_parameters=False, error_score='raise'):
+    """Fit estimator and compute scores for a given dataset split.
+
+    Parameters
+    ----------
+    estimator : estimator object implementing 'fit'
+        The object to use to fit the data.
+
+    X : array-like of shape at least 2D
+        The data to fit.
+
+    y : array-like, optional, default: None
+        The target variable to try to predict in the case of
+        supervised learning.
+
+    scorer : callable
+        A scorer callable object / function with signature
+        ``scorer(estimator, X, y)``.
+
+    train : array-like, shape (n_train_samples,)
+        Indices of training samples.
+
+    test : array-like, shape (n_test_samples,)
+        Indices of test samples.
+
+    verbose : integer
+        The verbosity level.
+
+    error_score : 'raise' (default) or numeric
+        Value to assign to the score if an error occurs in estimator fitting.
+        If set to 'raise', the error is raised. If a numeric value is given,
+        FitFailedWarning is raised. This parameter does not affect the refit
+        step, which will always raise the error.
+
+    parameters : dict or None
+        Parameters to be set on the estimator.
+
+    fit_params : dict or None
+        Parameters that will be passed to ``estimator.fit``.
+
+    return_train_score : boolean, optional, default: False
+        Compute and return score on training set.
+
+    return_parameters : boolean, optional, default: False
+        Return parameters that has been used for the estimator.
+
+    Returns
+    -------
+    train_score : float, optional
+        Score on training set, returned only if `return_train_score` is `True`.
+
+    test_score : float
+        Score on test set.
+
+    n_test_samples : int
+        Number of test samples.
+
+    scoring_time : float
+        Time spent for fitting and scoring in seconds.
+
+    parameters : dict or None, optional
+        The parameters that have been evaluated.
+    """
+    if verbose > 1:
+        if parameters is None:
+            msg = "no parameters to be set"
+        else:
+            msg = '%s' % (', '.join('%s=%s' % (k, v)
+                          for k, v in parameters.items()))
+        print("[CV] %s %s" % (msg, (64 - len(msg)) * '.'))
+
+    # Adjust length of sample weights
+    fit_params = fit_params if fit_params is not None else {}
+    fit_params = dict([(k, _index_param_value(X, v, train))
+                      for k, v in fit_params.items()])
+
+    if parameters is not None:
+        estimator.set_params(**parameters)
+
+    start_time = time.time()
+
+    X_train, y_train = _safe_split(estimator, X, y, train)
+    X_test, y_test = _safe_split(estimator, X, y, test, train)
+
+    foldname_train = "f{}_train".format(fold_index)
+    foldname_test = "f{}_test".format(fold_index)
+
+    try:
+        estimator.set_foldname(foldname_train)
+        if y_train is None:
+            estimator.fit(X_train, **fit_params)
+        else:
+            estimator.fit(X_train, y_train, **fit_params)
+
+    except Exception as e:
+        if error_score == 'raise':
+            raise
+        elif isinstance(error_score, numbers.Number):
+            test_score = error_score
+            if return_train_score:
+                train_score = error_score
+            warnings.warn("Classifier fit failed. The score on this train-test"
+                          " partition for these parameters will be set to %f. "
+                          "Details: \n%r" % (error_score, e), FitFailedWarning)
+        else:
+            raise ValueError("error_score must be the string 'raise' or a"
+                             " numeric value. (Hint: if using 'raise', please"
+                             " make sure that it has been spelled correctly.)"
+                             )
+
+    else:
+        estimator.set_foldname(foldname_test)
+        test_score = _score(estimator, X_test, y_test, scorer)
+        if return_train_score:
+            estimator.set_foldname(foldname_train)
+            train_score = _score(estimator, X_train, y_train, scorer)
+
+    scoring_time = time.time() - start_time
+
+    if verbose > 2:
+        msg += ", score=%f" % test_score
+    if verbose > 1:
+        end_msg = "%s -%s" % (msg, logger.short_format_time(scoring_time))
+        print("[CV] %s %s" % ((64 - len(end_msg)) * '.', end_msg))
+
+    ret = [train_score] if return_train_score else []
+    ret.extend([test_score, _num_samples(X_test), scoring_time])
+    if return_parameters:
+        ret.append(parameters)
+    return ret

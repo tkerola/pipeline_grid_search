@@ -1,0 +1,160 @@
+
+File-based intermediate result caching
+======================================
+Much more practical and easier to implement
+than DFS-based search order.
+
+Need to specify the cache folder for each experiment.
+Ideally, a unique folder for each experiment should be used.
+
+CV is only performed for the training data, so we can ignore
+which test set we use.
+
+Can be used as
+    PipelineGridSearchCV(..., mode='file', outdir='expdir')
+If mode is 'file' (other option is 'dfs'), then outdir is required for specifying the folder
+to store the experiment results.
+
+After each transform step, output an JSON file in the following format:
+{
+"date": UNIX timestamp
+"dataset": train_li.txt
+"fold": 1_0-5_1|full
+"stepname": name as in cv_params (e.g. fu__local__sg_sgwt)
+"params_before_this_step": params before this step ( {"param": "val"} )
+"stepparams": params for this step ( {"n_scales": 5, "use_ring_structure": True, "do_temporal_pooling": False} )
+"outfile": "train_li-5_0-fu_local__sg_sgwt.npy" (similar filename as the step file, saved with np.save(filename, arr))
+"fit_time": 123.5 # seconds
+"transform_time": 12.4 # seconds
+}
+
+filename: train_li-5_0-fu_local__sg_sgwt.json (as dataset + fold + stepname, separated by dashes)
+filename: train_li-5_0-2s4s5s6s7s9s3s0s20s3-fu_local__sg_sgwt.json (as dataset + fold + stepname, separated by dashes)
+
+Need to keep cv_params in the same order during the whole experiment.
+[index]s[index]s[index] records the parameters until this step:
+
+Logic
+=====
+fit(X_train_fold):
+for each step:
+    if not is_cached(steps[i]):
+        Xt = get_step_cache_outdata(steps[i-1], cv_params[stepname])
+        # Now, subsequent steps cannot possibly be in cache, and we need to recompute the rest of the pipeline.
+        break
+
+for each step:
+        Xt = steps[i].fit_transform(Xt)
+        # Save to cache
+        save_step_cache_outdata(steps[i], Xt, fold, is_train_fold)
+    
+transform(X_test_fold):
+for each step:
+    if not is_cached(steps[i]):
+        Xt = get_step_cache_outdata(steps[i-1], cv_params[stepname], fold, is_train_fold) # get previous test transform
+        # Now, subsequent steps cannot possibly be in cache, and we need to recompute the rest of the pipeline.
+        break
+
+for each step:
+        Xt = steps[i].transform(Xt)
+        # Save to cache
+        save_step_cache_outdata(steps[i], Xt, fold, is_train_fold) # save next test transform
+
+Notes
+=====
+Or, should we store all the params until each step in each stepfile?
+
+filename: train_li-5_0-2s4s5s6s7s9s3s0s20s3-fu_local__sg_sgwt.json (as dataset + fold + stepname, separated by dashes)
+
+How to enumerate the following?
+cv_params = dict([
+        ('fu__global__sgwt__n_scales', [50]),
+        ('fu__global__sgwt__use_ring_structure', [True]),
+        ('fu__global__tpp__pyramid_level', [4]),
+        ('fu__global__tpp__pooling_type', ["absmean"]),
+                                                      
+        ('fu__local__f2sf__subframes_n_frames', [10]),
+        ('fu__local__sg_sgwt__n_scales', [15]),
+        ('fu__local__sg_sgwt__use_ring_structure', [False,True]),
+        ('fu__local__sg_sgwt__do_temporal_pooling', [False]),
+        ('fu__local__sc__n_total_atoms', [300]),
+        ('fu__local__sc__n_max_active_atoms', [20]),
+        ('fu__local__tpp__pyramid_level', [2,3,4]),
+        ('fu__local__tpp__pooling_type', ["absmax"]),
+                                                    
+        ('pca__n_components', [0.98]),
+        ('svm__C', 2.0**np.arange(15)),#10.0**np.arange(5)),
+        ('svm__kernel', ['linear']),
+        ('svm__class_weight', [None,'auto']),
+    ])
+
+cv_params = dict([
+        (0, 0, 'fu__global__sgwt__n_scales', [(0,50)]),
+        (0, 1, 'fu__global__sgwt__use_ring_structure', [(0,True)]),
+        (0, 2, 'fu__global__tpp__pyramid_level', [(0,4)]),
+        (0, 3, 'fu__global__tpp__pooling_type', [(0,"absmean")]),
+                                                      
+        (0, 4, 'fu__local__f2sf__subframes_n_frames', [(0,10)]),
+        (0, 5, 'fu__local__sg_sgwt__n_scales', [(0,15)]),
+        (0, 6, 'fu__local__sg_sgwt__use_ring_structure', [(0,False),(1,True)]),
+        (0, 7, 'fu__local__sg_sgwt__do_temporal_pooling', [(0,False)]),
+        (0, 8, 'fu__local__sc__n_total_atoms', [(0,300)]),
+        (0, 9, 'fu__local__sc__n_max_active_atoms', [(0,20)]),
+        (0, 10, 'fu__local__tpp__pyramid_level', [(0,2),(1,3),(2,4)]),
+        (0, 11, 'fu__local__tpp__pooling_type', [(0,"absmax")]),
+                                                    
+        (1, 0, 'pca__n_components', [(0,0.98)]),
+        (2, 0, 'svm__C', enumerate(2.0**np.arange(15))),
+        (2, 1, 'svm__kernel', [(0,'linear')]),
+        (2, 2, 'svm__class_weight', [(0,None),(1,'auto')]),
+    ])
+
+Keep indices for step, step_param and param_value.
+local is independent of params of global and vice versa.
+train_li-5_0-s0p0v0-fu_local__sg_sgwt.json
+
+Pro/cons
+==========
+Pro
++ Keeps down the number of calls to fit/transform to a minimum.
++ Speeds up grid search time.
++ Works even with submerged Pipelines and FeatureUnions.
++ Saved the output feature matrix from each grid search transform
+  step, which allows post-inspection of grid search details.
+
+Cons
+- Needs disc space to store the cached results.
+- File I/O takes some time to perform, making this method
+  suitable for situations when each pipeline step takes longer
+  time than file I/O to perform.
+  Use _DFSGridSearchCVPipeline if each step is faster than file
+  I/O (but _DFSGridSearchCVPipeline cannot handle submerged Pipelines
+  and FeatureUnions, so beware).
+
+Roadmap
+=======
+Targeted classes:
+Pipeline
+FeatureUnion
+
+Methods used during grid search:
+fit
+fit_transform
+score (only by Pipeline)
+transform
+
+Recomputation depends on:
+foldname (fold_index + train/test)
+cv_params_tail
+
+GridSearchCV:
+for each parameters and fold:
+    clone(estimator)
+    estimator.set_params(parameters)
+    call _fit_and_score on train and test fold
+
+PipelineGridSearchCV:
+for each parameters and fold:
+    clone(estimator)
+    estimator.set_params(parameters)
+    call _fit_and_score on train and test fold
