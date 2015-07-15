@@ -414,7 +414,6 @@ def _do_cached_fit_transform(cache, canonical_estname, est, canonical_prefix, cv
     elapsed = time.time()
 
     if isinstance(est, Pipeline):
-        print("going into pipeline {}".format(canonical_estname))
         fit_params_steps = _get_params_steps(fit_params)
         cv_params_steps = _get_params_steps(cv_params)
 
@@ -466,8 +465,6 @@ def _do_cached_feature_union_fit_transform(cache, steps, canonical_prefix, cv_pa
         if cache.is_cached(foldname, local_active_params, canonical_stepname):
             # Load cache of step
             Xti = cache.load_outdata(foldname, local_active_params, canonical_stepname)
-            print("local_active_params:",local_active_params)
-            print("fu restart from fu part:",fu_name)
         else:
             elapsed = time.time()
             Xti = _do_cached_fit_transform(cache, canonical_stepname, fu_trans, subest_canonial_prefix, cv_params_steps[fu_name], X, y, scorer, foldname, local_active_params, mode, **fit_params_steps[fu_name])
@@ -629,7 +626,7 @@ def _fit_and_score_one_pipe(
     return ret
 
 def _fit_and_score_pipeline_grid_fold(
-        cachedir, datasetname,
+        mode, cachedir, datasetname,
         grid_estimator, X, y, scorer,
         fold_index, train, test, verbose,
         parameter_iterable, fit_params,
@@ -648,7 +645,10 @@ def _fit_and_score_pipeline_grid_fold(
     if verbose > 1:
         print("_fit_and_score_pipeline_grid_fold")
 
-    cache = StepCache(cachedir, datasetname)
+    if mode == 'file':
+        cache = StepCache(cachedir, datasetname)
+    else:
+        cache = None
 
     out = []
     for parameters in parameter_iterable:
@@ -709,10 +709,10 @@ class PipelineGridSearchCV(GridSearchCV):
         if self.mode == 'dfs':
             # Make the supplied Pipeline a _DFSGridSearchCVPipeline
             # for doing the grid_search
-            grid_estimator = _DFSGridSearchCVPipeline(
-                clone(self.estimator), self.param_grid, self.verbose)
+            #grid_estimator = _DFSGridSearchCVPipeline(
+            #    clone(self.estimator), self.param_grid, self.verbose)
+            grid_estimator = clone(self.estimator)
         elif self.mode == 'file':
-            stepcache = StepCache(self.cachedir, self.datasetname)
             #grid_estimator = _CacheGridSearchCVPipeline(clone(self.estimator), stepcache, self.verbose)
             grid_estimator = clone(self.estimator)
 
@@ -734,35 +734,6 @@ class PipelineGridSearchCV(GridSearchCV):
                     print("Removed {} existing files matching '{}' in cache dir ({}).".format(nfound, pattern_regex, self.cachedir))
         else:
             raise ValueError("Invalid mode specified.")
-
-        def add_sub_dfs_pipelines(est, params):
-            try:
-                params_steps = _get_params_steps(params)
-            except ValueError: # This happens when we reach an estimator without any subestimators.
-                return
-
-            if not isinstance(est, (Pipeline,FeatureUnion)):
-                return
-            steps = est.steps if isinstance(est, Pipeline) else est.transformer_list
-
-            for i,(step_name,step) in enumerate(steps):
-
-                if isinstance(step, Pipeline):
-                    if self.mode == 'dfs':
-                        pipe = _DFSGridSearchCVPipeline(step, params_steps[step_name], self.verbose)
-                    else:
-                        pipe = _CacheGridSearchCVPipeline(step, stepcache, self.verbose)
-                    steps[i] = (step_name,pipe)
-                    add_sub_dfs_pipelines(pipe, params_steps[step_name])
-                elif isinstance(step, FeatureUnion):
-                    fu = _GridSearchCVFeatureUnion(step.transformer_list, step.n_jobs, step.transformer_weights)
-                    steps[i] = (step_name, fu)
-                    add_sub_dfs_pipelines(fu, params_steps[step_name])
-                else:
-                    add_sub_dfs_pipelines(step, params_steps[step_name])
-
-        # Search for any embedded Pipelines and replace them with a _*GridSearchCVPipeline
-        #add_sub_dfs_pipelines(grid_estimator, self.param_grid)
 
         cv = self.cv
         self.scorer_ = check_scoring(grid_estimator, scoring=self.scoring)
@@ -797,7 +768,7 @@ class PipelineGridSearchCV(GridSearchCV):
             pre_dispatch=pre_dispatch
         )(
             delayed(_fit_and_score_pipeline_grid_fold)(
-                self.cachedir, self.datasetname,
+                self.mode, self.cachedir, self.datasetname,
                 clone(grid_estimator), X, y, self.scorer_,
                 fold_index, train, test, self.verbose, parameter_iterable,
                 self.fit_params, return_parameters=True,

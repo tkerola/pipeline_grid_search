@@ -60,6 +60,13 @@ def create_mock_estimator(classname,parameters,is_classifier=False):
     def transform(self, X):
         global n_transform_calls
         n_transform_calls += 1
+        odd = False
+        for k,v in self.get_params().items():
+            if odd:
+                X = X*v
+            else:
+                X = X-v
+            odd = not odd
         return X
         """
     body = "class {}{}:\n{}\n{}".format(classname,bases,init_body,main_body)
