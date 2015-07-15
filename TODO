@@ -158,3 +158,5 @@ for each parameters and fold:
     clone(estimator)
     estimator.set_params(parameters)
     call _fit_and_score on train and test fold
+
+TODO: Figure out why estimator names are duplicated. # 150710, 19:16

@@ -402,7 +402,7 @@ def test_pipeline_grid_search12():
 
     cv_params = [
         ('PCA__n_components', [3,5,7]),
-        ('Normalizer__norm', ['l2']),
+        ('Normalizer__norm', ['l1','l2']),
         ('SVC__C', [1.,10.,100.,1000.]),
     ]
 
