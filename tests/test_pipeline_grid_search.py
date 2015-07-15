@@ -10,6 +10,7 @@ import time
 import numpy as np
 
 from sklearn.base import BaseEstimator, TransformerMixin, ClassifierMixin
+from sklearn.cross_validation import StratifiedKFold
 from sklearn.datasets import make_classification
 from sklearn.decomposition import PCA
 from sklearn.grid_search import GridSearchCV
@@ -228,6 +229,7 @@ def test_pipeline_grid_search6():
         ('f3__c', [10,20,30]),
         ('f3__d', [10,20,30,40]),
         ('SVC__C', [1.,10.,100.,1000.]),
+        ('SVC__kernel', ['linear']),
     ]
 
     # Set assert_n_calls_equal to False, as we need to implement our custom counting of function calls in order to measure the call tests.
@@ -245,6 +247,7 @@ def test_pipeline_grid_search7():
         ('PCA__n_components', [3,5,7]),
         ('Normalizer__norm', ['l2']),
         ('SVC__C', [1.,10.,100.,1000.]),
+        ('SVC__kernel', ['linear']),
     ]
 
     perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False)
@@ -351,6 +354,7 @@ def test_pipeline_grid_search10():
         ('PCA__n_components', [3,5,7]),
         ('Normalizer__norm', ['l2']),
         ('SVC__C', [1.,10.,100.,1000.]),
+        ('SVC__kernel', ['linear']),
     ]
 
     # Set assert_n_calls_equal to False, as we need to implement our custom counting of function calls in order to measure the call tests.
@@ -387,6 +391,7 @@ def test_pipeline_grid_search11():
         ('PCA__n_components', [3,5,7]),
         ('Normalizer__norm', ['l2']),
         ('SVC__C', [1.,10.,100.,1000.]),
+        ('SVC__kernel', ['linear']),
     ]
 
     # Set assert_n_calls_equal to False, as we need to implement our custom counting of function calls in order to measure the call tests.
@@ -404,6 +409,37 @@ def test_pipeline_grid_search12():
         ('PCA__n_components', [3,5,7]),
         ('Normalizer__norm', ['l1','l2']),
         ('SVC__C', [1.,10.,100.,1000.]),
+        ('SVC__kernel', ['linear']),
+    ]
+
+    perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False, mode='file', cachedir='file_cache', datasetname='make_class')
+
+def test_pipeline_grid_search13():
+    # Test that _DFSGridSearchCVPipeline gives the same selected parameters as the normal GridSearchCV
+    parts = [
+        SVC()
+        ]
+
+    cv_params = [
+        ('SVC__C', [1.,10.,100.,1000.]),
+        ('SVC__kernel', ['linear']),
+    ]
+
+    perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False, mode='file', cachedir='file_cache', datasetname='make_class')
+
+def test_pipeline_grid_search14():
+    # Test that _DFSGridSearchCVPipeline gives the same selected parameters as the normal GridSearchCV
+    parts = [
+        PCA(),
+        Normalizer(),
+        SVC()
+        ]
+
+    cv_params = [
+        ('PCA__n_components', [3,5]),
+        ('Normalizer__norm', ['l2']),
+        ('SVC__C', [1.,10.]),
+        ('SVC__kernel', ['linear']),
     ]
 
     perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False, mode='file', cachedir='file_cache', datasetname='make_class')
@@ -419,6 +455,7 @@ def perform_pipeline_case(parts, cv_params, assert_n_calls_equal=True, **pipelin
     n_folds = 5
     n_jobs = 1
     verbose = 1
+    random_seed = 0
 
     # mock.MagicMock cannot be used since GridSearchCV resets each estimator using
     # clone() before each call to fit.
@@ -430,7 +467,7 @@ def perform_pipeline_case(parts, cv_params, assert_n_calls_equal=True, **pipelin
     n_transform_calls = 0
     n_fit_calls = 0
     ideal_cv_time = time.time()
-    model = PipelineGridSearchCV(estimator=pipe, param_grid=dict(cv_params), cv=n_folds, verbose=verbose, n_jobs=n_jobs, **pipelinegridsearchcv_kwargs)
+    model = PipelineGridSearchCV(pipe, dict(cv_params), cv=StratifiedKFold(y, n_folds, random_state=random_seed), verbose=verbose, n_jobs=n_jobs, **pipelinegridsearchcv_kwargs)
     model.fit(X,y)
     ideal_cv_time = time.time() - ideal_cv_time
     print("model.best_estimator_: {}".format(model.best_estimator_))
@@ -450,7 +487,7 @@ def perform_pipeline_case(parts, cv_params, assert_n_calls_equal=True, **pipelin
     n_transform_calls = 0
     n_fit_calls = 0
     naive_cv_time = time.time()
-    model_naive = GridSearchCV(pipe, dict(cv_params), cv=n_folds, verbose=verbose, n_jobs=n_jobs)
+    model_naive = GridSearchCV(pipe, dict(cv_params), cv=StratifiedKFold(y, n_folds, random_state=random_seed), verbose=verbose, n_jobs=n_jobs)
     model_naive.fit(X,y)
     naive_cv_time = time.time() - naive_cv_time
     print("Counts (GridSearchCV)")
@@ -466,8 +503,10 @@ def perform_pipeline_case(parts, cv_params, assert_n_calls_equal=True, **pipelin
         assert_equal(n_transform_calls, n_naive_transform_calls)
 
     # Make sure that PipelineGridSearchCV and GridSearchCV return the same result.
+    print("[pipeline_grid_search] best_params_:",model.best_params_)
+    print("[pipeline_grid_search] best_score_:",model.best_score_)
+    print("[naive_grid_search] best_params_:",model_naive.best_params_)
+    print("[naive_grid_search] best_score_:",model_naive.best_score_)
     assert_equal(model_naive.best_params_, model.best_params_)
     assert_equal(model_naive.best_score_, model.best_score_)
-    print("best_params_:",model.best_params_)
-    print("best_score_:",model.best_score_)
 

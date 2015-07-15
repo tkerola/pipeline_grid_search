@@ -372,7 +372,10 @@ class _DFSGridSearchCVPipeline(Pipeline, _CVDataMixin):
             return out
 
 def _canonical_step_params(canonical_prefix, params):
-    return map(lambda (a,b): ('{}{}'.format(canonical_prefix, a), b), sorted(params.items()))
+    return map(lambda (param_name, param_val): ((canonical_prefix+param_name), param_val), sorted(params.items()))
+
+def _create_subest_canonial_prefix(canonical_prefix, stepname):
+    return canonical_prefix + stepname + "__"
 
 def _get_start_state(cache, steps, X, foldname, canonical_prefix, cv_params_steps):
     active_params = []
@@ -380,12 +383,14 @@ def _get_start_state(cache, steps, X, foldname, canonical_prefix, cv_params_step
 
     # Find out how deep into the pipeline we have
     # existing cached values.
-    for step_index,(name, transform) in enumerate(steps):
+    for step_index,(stepname, transform) in enumerate(steps):
 
-        canonical_step_params = _canonical_step_params(canonical_prefix, cv_params_steps[name])
+        subest_canonial_prefix = _create_subest_canonial_prefix(canonical_prefix, stepname)
+        canonical_step_params = _canonical_step_params(subest_canonial_prefix, cv_params_steps[stepname])
         active_params.extend(canonical_step_params)
+        canonical_stepname = canonical_prefix + stepname
 
-        if not cache.is_cached(foldname, active_params, canonical_prefix + name):
+        if not cache.is_cached(foldname, active_params, canonical_stepname):
             start_step = step_index
             active_params = active_params[:-len(canonical_step_params)]
             if step_index == 0:
@@ -393,41 +398,43 @@ def _get_start_state(cache, steps, X, foldname, canonical_prefix, cv_params_step
             else:
                 # Load cache of previous step
                 prev_stepname = steps[step_index-1][0]
-                Xt = cache.load_outdata(foldname, active_params, canonical_prefix + prev_stepname)
+                prev_canonial_stepname = canonical_prefix + prev_stepname
+                Xt = cache.load_outdata(foldname, active_params, prev_canonial_stepname)
             break
     
     return Xt, start_step, active_params
 
-def _do_cached_fit_transform(cache, stepname, step, canonical_prefix, cv_params, X, y, scorer, foldname, active_params, mode, **fit_params):
+def _do_cached_fit_transform(cache, canonical_estname, est, canonical_prefix, cv_params, X, y, scorer, foldname, active_params, mode, **fit_params):
     # entering this function means that we have requested to
-    # recompute the value of this step.
+    # recompute the value of this estimator.
 
     canonical_step_params = _canonical_step_params(canonical_prefix, cv_params)
     active_params.extend(canonical_step_params)
+    subest_canonial_prefix = canonical_estname + "__"
     elapsed = time.time()
-    subest_canonial_prefix = canonical_prefix + stepname + "__"
 
-    if isinstance(step, Pipeline):
-        Xt = _do_cached_pipeline_fit_transform_or_score(cache, step.steps, subest_canonial_prefix, cv_params, X, y, scorer, foldname, active_params, mode, **fit_params)
-    elif isinstance(step, FeatureUnion):
-        Xt = _do_cached_feature_union_fit_transform(cache, step.transformer_list, subest_canonial_prefix, cv_params, X, y, scorer, foldname, active_params, mode, **fit_params)
+    if isinstance(est, Pipeline):
+        Xt = _do_cached_pipeline_fit_transform_or_score(cache, est.steps, subest_canonial_prefix, cv_params, X, y, scorer, foldname, active_params, mode, **fit_params)
+    elif isinstance(est, FeatureUnion):
+        raise NotImplementedError()
+        Xt = _do_cached_feature_union_fit_transform(cache, est.transformer_list, subest_canonial_prefix, cv_params, X, y, scorer, foldname, active_params, mode, **fit_params)
     else:
         # Do the actual fit/transform
 
         if mode.startswith('fit'):
-            if hasattr(step, "fit_transform"):
-                Xt = step.fit_transform(X, y, **fit_params)
+            if hasattr(est, "fit_transform"):
+                Xt = est.fit_transform(X, y, **fit_params)
             else:
-                Xt = step.fit(X, y, **fit_params) \
-                              .step(Xt)
+                Xt = est.fit(X, y, **fit_params) \
+                              .est(Xt)
         else:
-            Xt = step.transform(X)
+            Xt = est.transform(X)
 
     elapsed = time.time() - elapsed
     if mode.startswith('fit'):
-        _post_transform(cache, canonical_prefix + stepname, Xt, foldname, active_params, fit_transform_time=elapsed)
+        _post_transform(cache, canonical_estname, Xt, foldname, active_params, fit_transform_time=elapsed)
     else:
-        _post_transform(cache, canonical_prefix + stepname, Xt, foldname, active_params, transform_time=elapsed)
+        _post_transform(cache, canonical_estname, Xt, foldname, active_params, transform_time=elapsed)
 
     return Xt
 
@@ -439,22 +446,24 @@ def _do_cached_feature_union_fit_transform(cache, steps, canonical_prefix, cv_pa
 
     Xts = []
     for fu_name, fu_trans in steps:
-        canonical_step_params = _canonical_step_params(canonical_prefix, cv_params_steps[fu_name])
+        subest_canonial_prefix = _create_subest_canonial_prefix(canonical_prefix, fu_name)
+        canonical_step_params = _canonical_step_params(subest_canonial_prefix, cv_params_steps[fu_name])
         active_params = active_params + canonical_step_params
-        if cache.is_cached(foldname, active_params, canonical_prefix + fu_name):
+        canonical_stepname = canonical_prefix + fu_name
+        if cache.is_cached(foldname, active_params, subest_canonial_prefix):
             # Load cache of step
-            Xti = cache.load_outdata(foldname, active_params, canonical_prefix + fu_name)
+            Xti = cache.load_outdata(foldname, active_params, canonical_stepname)
             print(active_params)
             print("fu restart from fu part",fu_name)
         else:
             elapsed = time.time()
-            Xti = _do_cached_fit_transform(cache, fu_name, fu_trans, canonical_prefix, cv_params_steps[fu_name], X, y, scorer, foldname, active_params, mode, **fit_params_steps[fu_name])
+            Xti = _do_cached_fit_transform(cache, fu_name, fu_trans, subest_canonial_prefix, cv_params_steps[fu_name], X, y, scorer, foldname, active_params, mode, **fit_params_steps[fu_name])
 
             elapsed = time.time() - elapsed
             if mode.startswith('fit'):
-                _post_transform(cache, canonical_prefix + fu_name, Xti, foldname, active_params, fit_transform_time=elapsed)
+                _post_transform(cache, canonical_stepname, Xti, foldname, active_params, fit_transform_time=elapsed)
             else:
-                _post_transform(cache, canonical_prefix + fu_name, Xti, foldname, active_params, transform_time=elapsed)
+                _post_transform(cache, canonical_stepname, Xti, foldname, active_params, transform_time=elapsed)
 
         Xts.append(Xti)
     Xt = np.hstack(Xts)
@@ -479,9 +488,14 @@ def _do_cached_pipeline_fit_transform_or_score(cache, steps, canonical_prefix, c
     print("[{}] restart from step {}".format(foldname,steps[start_index][0]))
     print("local_active_params:",local_active_params)
     print("active_params:",active_params)
-    active_params = active_params + local_active_params
+    active_params.extend(local_active_params)
     for stepname, step in steps[start_index:-1]:
-        Xt = _do_cached_fit_transform(cache, stepname, step, canonical_prefix, cv_params_steps[stepname], X, y, scorer, foldname, active_params, subest_mode, **fit_params_steps[stepname])
+        print("doing step {}".format(stepname))
+        subest_canonial_prefix = _create_subest_canonial_prefix(canonical_prefix, stepname)
+        subest_canonial_stepname = canonical_prefix + stepname
+        Xt = _do_cached_fit_transform(cache, subest_canonial_stepname, step, subest_canonial_prefix, cv_params_steps[stepname], Xt, y, scorer, foldname, active_params, subest_mode, **fit_params_steps[stepname])
+
+    print("[end of pipe] active_params:",active_params)
 
     # The last step of a pipeline is special,
     # so let's treat it separately at the end.
@@ -489,7 +503,9 @@ def _do_cached_pipeline_fit_transform_or_score(cache, steps, canonical_prefix, c
     if mode == 'fit':
         step.fit(Xt, y)
     elif mode.endswith('transform'):
-        Xt = _do_cached_fit_transform(cache, stepname, step, canonical_prefix, cv_params_steps[stepname], X, y, scorer, foldname, active_params, subest_mode, **fit_params_steps[stepname])
+        subest_canonial_prefix = _create_subest_canonial_prefix(canonical_prefix, stepname)
+        subest_canonial_stepname = canonical_prefix + stepname
+        Xt = _do_cached_fit_transform(cache, subest_canonial_stepname, step, subest_canonial_prefix, cv_params_steps[stepname], Xt, y, scorer, foldname, active_params, subest_mode, **fit_params_steps[stepname])
         return Xt
     elif mode.endswith('score'):
         if mode.startswith('fit'):
@@ -673,7 +689,7 @@ class PipelineGridSearchCV(GridSearchCV):
                     raise ValueError("Specified cachedir is a file. Cannot overwrite {}".format(self.cachedir))
                 os.makedirs(self.cachedir)
             else:
-                pattern_regex = r'{}-.*\.(ftc|npy)'.format(re.escape(self.datasetname))
+                pattern_regex = r'{}+.*\.(ftc|npy)'.format(re.escape(self.datasetname))
                 pattern = re.compile(pattern_regex)
                 nfound = 0
                 for f in os.listdir(self.cachedir):

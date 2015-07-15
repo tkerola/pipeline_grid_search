@@ -16,6 +16,7 @@ class StepCache(object):
             self.datasetname = datasetname
         self.seen_params_tails = {}
         self.seen_outdata = {}
+        #use_memory_cache = False
         self.use_memory_cache = use_memory_cache
 
     def get_cache_filename(self, foldname, active_params, canonical_stepname):
@@ -31,7 +32,7 @@ class StepCache(object):
                        params until (and including) the current step.
         """
         param_hash = hash(tuple(active_params))
-        filename = '{}/{}-{}-{}-{}.ftc'.format(self.cachedir, self.datasetname, foldname, param_hash, canonical_stepname)
+        filename = '{}/{}+{}+{}+{}.ftc'.format(self.cachedir, self.datasetname, foldname, canonical_stepname, param_hash)
         return filename
 
     def is_cached(self, foldname, active_params, canonical_stepname):
