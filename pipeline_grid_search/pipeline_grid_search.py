@@ -25,7 +25,7 @@ from scipy import sparse
 
 from sklearn.base import is_classifier, clone, BaseEstimator
 from sklearn.cross_validation import check_cv, _safe_split, _score
-from sklearn.externals.joblib import Parallel, delayed
+from sklearn.externals.joblib import Parallel, delayed, logger
 from sklearn.externals import six
 from sklearn.grid_search import GridSearchCV, ParameterGrid, _CVScoreTuple
 from sklearn.metrics.scorer import check_scoring
