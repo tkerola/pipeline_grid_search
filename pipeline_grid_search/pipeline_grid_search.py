@@ -684,7 +684,7 @@ def _fit_and_score_pipeline_grid_fold(
 
 class PipelineGridSearchCV(GridSearchCV):
 
-    def __init__(self, estimator, param_grid, mode='file', cachedir=None, datasetname=None,
+    def __init__(self, estimator, param_grid, mode='dfs', cachedir=None, datasetname=None,
                  *args, **kwargs):
         super(PipelineGridSearchCV, self).__init__(estimator, param_grid, *args, **kwargs)
 
@@ -706,59 +706,47 @@ class PipelineGridSearchCV(GridSearchCV):
     def _fit(self, X, y, parameter_iterable):
         """Actual fitting,  performing the search over parameters."""
 
-        fit_params_steps = _get_params_steps(self.fit_params)
-        X_cv = X
-        for step_index, (step_name, step) in enumerate(self.estimator.steps):
-            # Assume estimator__param syntax of params.
-            step_params_found = False
-            for pname, pvals in self.param_grid.iteritems():
-                param_step_name, param = pname.split('__', 1)
-                if param_step_name == step_name:
-                    step_params_found = True
-                    break
-            if step_params_found:
-                break
-            else:
-                if hasattr(step, "fit_transform"):
-                    X_cv = step.fit_transform(X_cv, y, **fit_params_steps[step_name])
-                else:
-                    X_cv = step.fit(X_cv, y, **fit_params_steps[step_name]).transform(X_cv)
-
-        if step_index > 0:
-            print("PipelineGridSearchCV: >>> Fast-forwarded to step {}".format(self.estimator.steps[step_index]))
-            grid_estimator = clone(Pipeline(self.estimator.steps[step_index:]))
-        else:
+        if self.mode == 'dfs':
+            # Make the supplied Pipeline a _DFSGridSearchCVPipeline
+            # for doing the grid_search
+            #grid_estimator = _DFSGridSearchCVPipeline(
+            #    clone(self.estimator), self.param_grid, self.verbose)
+            grid_estimator = clone(self.estimator)
+        elif self.mode == 'file':
+            #grid_estimator = _CacheGridSearchCVPipeline(clone(self.estimator), stepcache, self.verbose)
             grid_estimator = clone(self.estimator)
 
-        # Cache dir handling
-        if not os.path.isdir(self.cachedir):
-            if os.path.isfile(self.cachedir):
-                raise ValueError("Specified cachedir is a file. Cannot overwrite {}".format(self.cachedir))
-            os.makedirs(self.cachedir)
+            # Cache dir handling
+            if not os.path.isdir(self.cachedir):
+                if os.path.isfile(self.cachedir):
+                    raise ValueError("Specified cachedir is a file. Cannot overwrite {}".format(self.cachedir))
+                os.makedirs(self.cachedir)
+            else:
+                pattern_regex = r'{}+.*\.(ftc|npy)'.format(re.escape(self.datasetname))
+                pattern = re.compile(pattern_regex)
+                nfound = 0
+                for f in os.listdir(self.cachedir):
+                    if pattern.search(f):
+                        p = os.path.join(self.cachedir, f)
+                        os.remove(os.path.join(self.cachedir, f))
+                        nfound += 1
+                if self.verbose > 0:
+                    print("Removed {} existing files matching '{}' in cache dir ({}).".format(nfound, pattern_regex, self.cachedir))
         else:
-            pattern_regex = r'{}+.*\.(ftc|npy)'.format(re.escape(self.datasetname))
-            pattern = re.compile(pattern_regex)
-            nfound = 0
-            for f in os.listdir(self.cachedir):
-                if pattern.search(f):
-                    p = os.path.join(self.cachedir, f)
-                    os.remove(os.path.join(self.cachedir, f))
-                    nfound += 1
-            if self.verbose > 0:
-                print("Removed {} existing files matching '{}' in cache dir ({}).".format(nfound, pattern_regex, self.cachedir))
+            raise ValueError("Invalid mode specified.")
 
         cv = self.cv
         self.scorer_ = check_scoring(grid_estimator, scoring=self.scoring)
 
-        n_samples = _num_samples(X_cv)
-        X_cv, y = indexable(X_cv, y)
+        n_samples = _num_samples(X)
+        X, y = indexable(X, y)
 
         if y is not None:
             if len(y) != n_samples:
                 raise ValueError('Target variable (y) has a different number '
                                  'of samples (%i) than data (X: %i samples)'
                                  % (len(y), n_samples))
-        cv = check_cv(cv, X_cv, y, classifier=is_classifier(grid_estimator))
+        cv = check_cv(cv, X, y, classifier=is_classifier(grid_estimator))
 
         if self.verbose > 0:
             if isinstance(parameter_iterable, Sized):
@@ -781,7 +769,7 @@ class PipelineGridSearchCV(GridSearchCV):
         )(
             delayed(_fit_and_score_pipeline_grid_fold)(
                 self.mode, self.cachedir, self.datasetname,
-                clone(grid_estimator), X_cv, y, self.scorer_,
+                clone(grid_estimator), X, y, self.scorer_,
                 fold_index, train, test, self.verbose, parameter_iterable,
                 self.fit_params, return_parameters=True,
                 error_score=self.error_score)
@@ -830,6 +818,8 @@ class PipelineGridSearchCV(GridSearchCV):
                       reverse=True)[0]
         self.best_params_ = best.parameters
         self.best_score_ = best.mean_validation_score
+
+        print("PipelineGridSearchCV: grid_estimator after fit: {}".format(grid_estimator))
 
         if self.refit:
             # fit the best estimator using the entire dataset
@@ -919,4 +909,107 @@ class _DFSParameterGrid(ParameterGrid):
                 for v in itertools.product(*values):
                     params = dict(zip(keys, v))
                     yield params
+
+def _pipeline_grid_search_fit_one_transformer(transformer, X, y, parameters, foldname):
+    if isinstance(transformer, (_DFSGridSearchCVPipeline, _CacheGridSearchCVPipeline)):
+        transformer.store_cv_data(parameters, foldname)
+        transformer.clone_steps()
+        transformer.set_params(**parameters)
+
+    return _fit_one_transformer(transformer, X, y)
+
+def _pipeline_grid_search_fit_transform_one(transformer, name, X, y, transformer_weights,
+                        parameters, foldname,
+                       **fit_params):
+    if isinstance(transformer, (_DFSGridSearchCVPipeline, _CacheGridSearchCVPipeline)):
+        transformer.store_cv_data(parameters, foldname)
+        transformer.clone_steps()
+        transformer.set_params(**parameters)
+
+    return _fit_transform_one(transformer, name, X, y, transformer_weights, **fit_params)
+
+def _pipeline_grid_search_transform_one(transformer, name, X, transformer_weights, parameters, foldname):
+    if isinstance(transformer, (_DFSGridSearchCVPipeline, _CacheGridSearchCVPipeline)):
+        transformer.store_cv_data(parameters, foldname)
+        transformer.clone_steps()
+        transformer.set_params(**parameters)
+
+    return _transform_one(transformer, name, X, transformer_weights)
+
+class _GridSearchCVFeatureUnion(FeatureUnion, _CVDataMixin):
+    """
+    A FeatureUnion that calls handles embedded _*GridSearchCVPipeline
+    estimators correctly.
+
+    Note: This class should never be used directly. Only by PipelineGridSearchCV.
+    """
+    def __init__(self, transformer_list, n_jobs=1, transformer_weights=None):
+        super(_GridSearchCVFeatureUnion, self).__init__(transformer_list, n_jobs, transformer_weights)
+
+    def fit(self, X, y=None):
+        """Fit all transformers using X.
+
+        Parameters
+        ----------
+        X : array-like or sparse matrix, shape (n_samples, n_features)
+            Input data, used to fit transformers.
+        """
+        transformers = Parallel(n_jobs=self.n_jobs)(
+            delayed(_pipeline_grid_search_fit_one_transformer)(trans, X, y, self.cv_params_steps[name], self.cv_foldname)
+            for name, trans in self.transformer_list)
+        self._update_transformer_list(transformers)
+        return self
+
+    def fit_transform(self, X, y=None, **fit_params):
+        """Fit all transformers using X, transform the data and concatenate
+        results.
+
+        Parameters
+        ----------
+        X : array-like or sparse matrix, shape (n_samples, n_features)
+            Input data to be transformed.
+
+        Returns
+        -------
+        X_t : array-like or sparse matrix, shape (n_samples, sum_n_components)
+            hstack of results of transformers. sum_n_components is the
+            sum of n_components (output dimension) over transformers.
+        """
+        result = Parallel(n_jobs=self.n_jobs)(
+            delayed(_pipeline_grid_search_fit_transform_one)(trans, name, X, y,
+                                        self.transformer_weights,
+                                        self.cv_params_steps[name], self.cv_foldname,
+                                        **fit_params)
+            for name, trans in self.transformer_list)
+
+        Xs, transformers = zip(*result)
+        self._update_transformer_list(transformers)
+        if any(sparse.issparse(f) for f in Xs):
+            Xs = sparse.hstack(Xs).tocsr()
+        else:
+            Xs = np.hstack(Xs)
+        return Xs
+
+    def transform(self, X):
+        """Transform X separately by each transformer, concatenate results.
+
+        Parameters
+        ----------
+        X : array-like or sparse matrix, shape (n_samples, n_features)
+            Input data to be transformed.
+
+        Returns
+        -------
+        X_t : array-like or sparse matrix, shape (n_samples, sum_n_components)
+            hstack of results of transformers. sum_n_components is the
+            sum of n_components (output dimension) over transformers.
+        """
+        Xs = Parallel(n_jobs=self.n_jobs)(
+            delayed(_pipeline_grid_search_transform_one)(trans, name, X, self.transformer_weights, self.cv_params_steps[name], self.cv_foldname)
+            for name, trans in self.transformer_list)
+        if any(sparse.issparse(f) for f in Xs):
+            Xs = sparse.hstack(Xs).tocsr()
+        else:
+            Xs = np.hstack(Xs)
+        return Xs
 
