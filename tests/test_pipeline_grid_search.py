@@ -485,6 +485,42 @@ def test_pipeline_grid_search15():
     # Set assert_n_calls_equal to False, as we need to implement our custom counting of function calls in order to measure the call tests.
     perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False, mode='file', cachedir='file_cache', datasetname='make_class')
 
+def test_pipeline_grid_search16():
+    # Test if _CacheGridSearchCVPipeline works with fast-forwarding
+    parts = [
+        create_mock_estimator("f0",[("p1",0)]),
+        create_mock_estimator("f1",[("p1",0)]),
+        create_mock_estimator("f2",[("p1",0)]),
+        create_mock_estimator("f3",[("p1",0)]),
+        FeatureUnion([
+            ('feat1', Pipeline([
+                ('f11', create_mock_estimator("f11", [("p1",0)])),
+                ('f12', create_mock_estimator("f12", [("p1",0)])),
+                ])),
+            ('feat2', Pipeline([
+                ('f21', create_mock_estimator("f21", [("p1",0)])),
+                ('f22', create_mock_estimator("f22", [("p1",0)])),
+                ])),
+            ]),
+        PCA(),
+        Normalizer(),
+        SVC(),
+        ]
+
+    cv_params = [
+        ('FeatureUnion__feat1__f11__p1', [30,40]),
+        ('FeatureUnion__feat1__f12__p1', [50,60]),
+        ('FeatureUnion__feat2__f21__p1', [100,200,300]),
+        ('FeatureUnion__feat2__f22__p1', [400,500,600]),
+        ('PCA__n_components', [3,5]),
+        ('Normalizer__norm', ['l2']),
+        ('SVC__C', [1.,10.]),
+        ('SVC__kernel', ['linear']),
+    ]
+
+    # Set assert_n_calls_equal to False, as we need to implement our custom counting of function calls in order to measure the call tests.
+    perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False, mode='file', cachedir='file_cache', datasetname='make_class')
+
 def perform_pipeline_case(parts, cv_params, assert_n_calls_equal=True, **pipelinegridsearchcv_kwargs):
     # tests a particular pipe and cv_params combination
 
