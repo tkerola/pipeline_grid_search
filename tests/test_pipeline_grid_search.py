@@ -5,13 +5,16 @@ Testing for pipeline_grid_search module.
 from __future__ import print_function
 from __future__ import division
 
+import time
+
 import numpy as np
 
 from sklearn.base import BaseEstimator, TransformerMixin, ClassifierMixin
+from sklearn.cross_validation import StratifiedKFold
 from sklearn.datasets import make_classification
 from sklearn.decomposition import PCA
 from sklearn.grid_search import GridSearchCV
-from sklearn.pipeline import Pipeline
+from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.preprocessing import Normalizer
 from sklearn.svm import SVC
 
@@ -57,6 +60,13 @@ def create_mock_estimator(classname,parameters,is_classifier=False):
     def transform(self, X):
         global n_transform_calls
         n_transform_calls += 1
+        odd = False
+        for k,v in self.get_params().items():
+            if odd:
+                X = X*v
+            else:
+                X = X-v
+            odd = not odd
         return X
         """
     body = "class {}{}:\n{}\n{}".format(classname,bases,init_body,main_body)
@@ -226,13 +236,14 @@ def test_pipeline_grid_search6():
         ('f3__c', [10,20,30]),
         ('f3__d', [10,20,30,40]),
         ('SVC__C', [1.,10.,100.,1000.]),
+        ('SVC__kernel', ['linear']),
     ]
 
     # Set assert_n_calls_equal to False, as we need to implement our custom counting of function calls in order to measure the call tests.
     perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False)
 
 def test_pipeline_grid_search7():
-    # Test that the number of estimator calls is less than the ones for regular GridSearchCV
+    # Test that _DFSGridSearchCVPipeline gives the same selected parameters as the normal GridSearchCV
     parts = [
         PCA(),
         Normalizer(),
@@ -243,11 +254,238 @@ def test_pipeline_grid_search7():
         ('PCA__n_components', [3,5,7]),
         ('Normalizer__norm', ['l2']),
         ('SVC__C', [1.,10.,100.,1000.]),
+        ('SVC__kernel', ['linear']),
     ]
 
     perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False)
 
-def perform_pipeline_case(parts, cv_params, assert_n_calls_equal=True):
+def test_pipeline_grid_search8():
+    # Test using a FeatureUnion with embedded Pipelines.
+    parts = [
+        create_mock_estimator("f0",[]),
+        FeatureUnion([
+            ('feat1', Pipeline([
+                ('f11', create_mock_estimator("f11", [("p1",0),("p2",2)])),
+                ])),
+            ('feat2', Pipeline([
+                ('f12', create_mock_estimator("f12", [("a",0)])),
+                ])),
+            ]),
+        create_mock_estimator("f1", [("p1",0),("p2",2)]),
+        create_mock_estimator("f2",[]),
+        create_mock_estimator("f3",[("c",0),("d",0)]),
+        create_mock_estimator("f4",[]),
+        create_mock_estimator("f5",[]),
+        create_mock_classifier("f11",[]),
+        ]
+
+    cv_params = [
+        ('FeatureUnion__feat1__f11__p1', [10,20]),
+        ('FeatureUnion__feat2__f12__a', [10,20,30]),
+        ('f1__p1', [10,20]),
+        ('f3__c', [10,20,30]),
+        ('f3__d', [10,20,30,40]),
+    ]
+
+    # Set assert_n_calls_equal to False, as we need to implement our custom counting of function calls in order to measure the call tests.
+    perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False)
+    # TODO: Update assert_n_calls_equal logic to work correctly with pipelines embedded in FeatureUnions.
+
+def test_pipeline_grid_search9():
+    # Test using a FeatureUnion with embedded Pipelines.
+    parts = [
+        create_mock_estimator("f0",[]),
+        FeatureUnion([
+            ('feat1', Pipeline([
+                ('f11', create_mock_estimator("f11", [("p1",0),("p2",2)])),
+                ('f111', create_mock_estimator("f111", [("p1",0),("p2",2)])),
+                ('f112', create_mock_estimator("f112", [("p1",0),("p2",2)])),
+                ])),
+            ('feat2', Pipeline([
+                ('f12', create_mock_estimator("f12", [("a",0)])),
+                ('f121', create_mock_estimator("f121", [("a",0)])),
+                ('f122', create_mock_estimator("f122", [("a",0)])),
+                ])),
+            ]),
+        create_mock_estimator("f1", [("p1",0),("p2",2)]),
+        create_mock_estimator("f2",[]),
+        create_mock_estimator("f3",[("c",0),("d",0)]),
+        create_mock_estimator("f4",[]),
+        create_mock_estimator("f5",[]),
+        create_mock_classifier("f11",[]),
+        ]
+
+    cv_params = [
+        ('FeatureUnion__feat1__f11__p1', [10,20]),
+        #('FeatureUnion__feat1__f111__p1', [10,20]),
+        ('FeatureUnion__feat1__f112__p1', [10,20]),
+        #('FeatureUnion__feat2__f12__a', [10,20,30]),
+        #('FeatureUnion__feat2__f121__a', [10,20,30]),
+        ('FeatureUnion__feat2__f122__a', [10,20,30]),
+        ('f1__p1', [10,20]),
+        ('f3__c', [10,20,30]),
+        ('f3__d', [10,20,30,40]),
+    ]
+
+    # Set assert_n_calls_equal to False, as we need to implement our custom counting of function calls in order to measure the call tests.
+    perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False, mode='file', cachedir='file_cache', datasetname='make_class')
+
+def test_pipeline_grid_search10():
+    # Test if _DFSGridSearchCVPipeline works with submerged pipelines.
+    parts = [
+        create_mock_estimator("f0",[]),
+        FeatureUnion([
+            ('feat1', Pipeline([
+                ('f11', create_mock_estimator("f11", [("p1",0),("p2",2)])),
+                ('f111', create_mock_estimator("f111", [("p1",0),("p2",2)])),
+                ('f112', create_mock_estimator("f112", [("p1",0),("p2",2)])),
+                ])),
+            ('feat2', Pipeline([
+                ('f12', create_mock_estimator("f12", [("a",0)])),
+                ('f121', create_mock_estimator("f121", [("a",0)])),
+                ('f122', create_mock_estimator("f122", [("a",0)])),
+                ])),
+            ]),
+        PCA(),
+        Normalizer(),
+        SVC(),
+        ]
+
+    cv_params = [
+        ('FeatureUnion__feat1__f11__p1', [10,20]),
+        #('FeatureUnion__feat1__f111__p1', [10,20]),
+        ('FeatureUnion__feat1__f112__p1', [10,20]),
+        #('FeatureUnion__feat2__f12__a', [10,20,30]),
+        #('FeatureUnion__feat2__f121__a', [10,20,30]),
+        ('FeatureUnion__feat2__f122__a', [10,20,30]),
+        ('PCA__n_components', [3,5,7]),
+        ('Normalizer__norm', ['l2']),
+        ('SVC__C', [1.,10.,100.,1000.]),
+        ('SVC__kernel', ['linear']),
+    ]
+
+    # Set assert_n_calls_equal to False, as we need to implement our custom counting of function calls in order to measure the call tests.
+    perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False, mode='dfs', cachedir='file_cache', datasetname='make_class')
+
+def test_pipeline_grid_search11():
+    # Test if _CacheGridSearchCVPipeline works with submerged pipelines.
+    parts = [
+        create_mock_estimator("f0",[]),
+        FeatureUnion([
+            ('feat1', Pipeline([
+                ('f11', create_mock_estimator("f11", [("p1",0),("p2",2)])),
+                ('f111', create_mock_estimator("f111", [("p1",0),("p2",2)])),
+                ('f112', create_mock_estimator("f112", [("p1",0),("p2",2)])),
+                ])),
+            ('feat2', Pipeline([
+                ('f12', create_mock_estimator("f12", [("a",0)])),
+                ('f121', create_mock_estimator("f121", [("a",0)])),
+                ('f122', create_mock_estimator("f122", [("a",0)])),
+                ])),
+            ]),
+        PCA(),
+        Normalizer(),
+        SVC(),
+        ]
+
+    cv_params = [
+        ('FeatureUnion__feat1__f11__p1', [10,20]),
+        #('FeatureUnion__feat1__f111__p1', [10,20]),
+        ('FeatureUnion__feat1__f112__p1', [10,20]),
+        #('FeatureUnion__feat2__f12__a', [10,20,30]),
+        #('FeatureUnion__feat2__f121__a', [10,20,30]),
+        ('FeatureUnion__feat2__f122__a', [10,20,30]),
+        ('PCA__n_components', [3,5,7]),
+        ('Normalizer__norm', ['l2']),
+        ('SVC__C', [1.,10.,100.,1000.]),
+        ('SVC__kernel', ['linear']),
+    ]
+
+    # Set assert_n_calls_equal to False, as we need to implement our custom counting of function calls in order to measure the call tests.
+    perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False, mode='file', cachedir='file_cache', datasetname='make_class')
+
+def test_pipeline_grid_search12():
+    # Test that _DFSGridSearchCVPipeline gives the same selected parameters as the normal GridSearchCV
+    parts = [
+        PCA(),
+        Normalizer(),
+        SVC()
+        ]
+
+    cv_params = [
+        ('PCA__n_components', [3,5,7]),
+        ('Normalizer__norm', ['l1','l2']),
+        ('SVC__C', [1.,10.,100.,1000.]),
+        ('SVC__kernel', ['linear']),
+    ]
+
+    perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False, mode='file', cachedir='file_cache', datasetname='make_class')
+
+def test_pipeline_grid_search13():
+    # Test that _DFSGridSearchCVPipeline gives the same selected parameters as the normal GridSearchCV
+    parts = [
+        SVC()
+        ]
+
+    cv_params = [
+        ('SVC__C', [1.,10.,100.,1000.]),
+        ('SVC__kernel', ['linear']),
+    ]
+
+    perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False, mode='file', cachedir='file_cache', datasetname='make_class')
+
+def test_pipeline_grid_search14():
+    # Test that _DFSGridSearchCVPipeline gives the same selected parameters as the normal GridSearchCV
+    parts = [
+        PCA(),
+        Normalizer(),
+        SVC()
+        ]
+
+    cv_params = [
+        ('PCA__n_components', [3,5]),
+        ('Normalizer__norm', ['l2']),
+        ('SVC__C', [1.,10.]),
+        ('SVC__kernel', ['linear']),
+    ]
+
+    perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False, mode='file', cachedir='file_cache', datasetname='make_class')
+
+def test_pipeline_grid_search15():
+    # Test if _CacheGridSearchCVPipeline works with submerged pipelines.
+    parts = [
+        create_mock_estimator("f0",[("p1",0)]),
+        FeatureUnion([
+            ('feat1', Pipeline([
+                ('f11', create_mock_estimator("f11", [("p1",0)])),
+                ('f12', create_mock_estimator("f12", [("p1",0)])),
+                ])),
+            ('feat2', Pipeline([
+                ('f21', create_mock_estimator("f21", [("p1",0)])),
+                ('f22', create_mock_estimator("f22", [("p1",0)])),
+                ])),
+            ]),
+        PCA(),
+        Normalizer(),
+        SVC(),
+        ]
+
+    cv_params = [
+        ('f0__p1', [10,20]),
+        ('FeatureUnion__feat1__f11__p1', [30,40]),
+        ('FeatureUnion__feat1__f12__p1', [50,60]),
+        ('FeatureUnion__feat2__f21__p1', [100,200,300]),
+        ('FeatureUnion__feat2__f22__p1', [400,500,600]),
+        ('PCA__n_components', [3,5]),
+        ('Normalizer__norm', ['l2']),
+        ('SVC__C', [1.,10.]),
+        ('SVC__kernel', ['linear']),
+    ]
+
+    # Set assert_n_calls_equal to False, as we need to implement our custom counting of function calls in order to measure the call tests.
+    perform_pipeline_case(parts, cv_params, assert_n_calls_equal=False, mode='file', cachedir='file_cache', datasetname='make_class')
+
+def perform_pipeline_case(parts, cv_params, assert_n_calls_equal=True, **pipelinegridsearchcv_kwargs):
     # tests a particular pipe and cv_params combination
 
     pipe = Pipeline([ (p.__class__.__name__, p) for p in parts ])
@@ -257,7 +495,8 @@ def perform_pipeline_case(parts, cv_params, assert_n_calls_equal=True):
 
     n_folds = 5
     n_jobs = 1
-    verbose = 0
+    verbose = 1
+    random_seed = 0
 
     # mock.MagicMock cannot be used since GridSearchCV resets each estimator using
     # clone() before each call to fit.
@@ -268,11 +507,15 @@ def perform_pipeline_case(parts, cv_params, assert_n_calls_equal=True):
     # Start PipelineGridSearchCV test here
     n_transform_calls = 0
     n_fit_calls = 0
-    model = PipelineGridSearchCV(pipe, dict(cv_params), cv=n_folds, verbose=verbose, n_jobs=n_jobs)
+    ideal_cv_time = time.time()
+    model = PipelineGridSearchCV(pipe, dict(cv_params), cv=StratifiedKFold(y, n_folds, random_state=random_seed), verbose=verbose, n_jobs=n_jobs, **pipelinegridsearchcv_kwargs)
     model.fit(X,y)
+    ideal_cv_time = time.time() - ideal_cv_time
+    print("model.best_estimator_: {}".format(model.best_estimator_))
     print("Counts (PipelineGridSearchCV)")
     print("n_fit_calls:",n_fit_calls)
     print("n_transform_calls:",n_transform_calls)
+    print("time to do grid search:",ideal_cv_time)
 
     n_ideal_fit_calls = calc_n_ideal_fit_calls(parts,cv_params,n_folds)
     n_ideal_transform_calls = calc_n_ideal_transform_calls(parts,cv_params,n_folds)
@@ -284,11 +527,14 @@ def perform_pipeline_case(parts, cv_params, assert_n_calls_equal=True):
     # Start GridSearchCV test here
     n_transform_calls = 0
     n_fit_calls = 0
-    model_naive = GridSearchCV(pipe, dict(cv_params), cv=n_folds, verbose=verbose, n_jobs=n_jobs)
+    naive_cv_time = time.time()
+    model_naive = GridSearchCV(pipe, dict(cv_params), cv=StratifiedKFold(y, n_folds, random_state=random_seed), verbose=verbose, n_jobs=n_jobs)
     model_naive.fit(X,y)
+    naive_cv_time = time.time() - naive_cv_time
     print("Counts (GridSearchCV)")
     print("n_fit_calls:",n_fit_calls)
     print("n_transform_calls:",n_transform_calls)
+    print("time to do grid search:",naive_cv_time)
 
     n_param_combs = np.prod(map(lambda x: len(x[1]), cv_params))
     n_naive_fit_calls = n_param_combs * len(parts) * n_folds + len(parts)
@@ -298,6 +544,13 @@ def perform_pipeline_case(parts, cv_params, assert_n_calls_equal=True):
         assert_equal(n_transform_calls, n_naive_transform_calls)
 
     # Make sure that PipelineGridSearchCV and GridSearchCV return the same result.
+    print("[pipeline_grid_search] best_params_:",model.best_params_)
+    print("[pipeline_grid_search] best_score_:",model.best_score_)
+    print("[naive_grid_search] best_params_:",model_naive.best_params_)
+    print("[naive_grid_search] best_score_:",model_naive.best_score_)
     assert_equal(model_naive.best_score_, model.best_score_)
+    # Note that for equal mean_validation_score, the best params of GridSearchCV will depend
+    # on the order that they occur to the classifier, so sometimes this test fails even though
+    # PipelineGridSearchCV behaves correctly.
     assert_equal(model_naive.best_params_, model.best_params_)
 
